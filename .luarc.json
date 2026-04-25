@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "diagnostics": {
+    "globals": ["vim"],
+    "disable": ["missing-fields"],
+    "unusedLocalExclude": ["_*"]
+  },
+  "workspace": {
+    "library": [
+      "$VIMRUNTIME/lua",
+      "${3rd}/luv/library"
+    ],
+    "checkThirdParty": false,
+    "maxPreload": 1600,
+    "preloadFileSize": 1000
+  },
+  "runtime": {
+    "version": "LuaJIT"
+  },
+  "doc": {
+    "privateName": ["_*"]
+  }
+}

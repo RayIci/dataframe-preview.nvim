@@ -1,0 +1,5 @@
+ui/node_modules/
+ui/.vite/
+*.swp
+*.swo
+.DS_Store

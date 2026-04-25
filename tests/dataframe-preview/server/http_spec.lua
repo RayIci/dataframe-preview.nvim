@@ -1,0 +1,25 @@
+local http = require("dataframe-preview.server.http")
+
+describe("http.parse_request", function()
+  it("parses a well-formed GET request", function()
+    local raw = "GET /?session=abc HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n\r\n"
+    local req = http.parse_request(raw)
+    assert.not_nil(req)
+    assert.equal("GET", req.method)
+    assert.equal("/?session=abc", req.path)
+    assert.equal("websocket", req.headers["upgrade"])
+  end)
+
+  it("returns nil for an incomplete request (no double CRLF)", function()
+    assert.is_nil(http.parse_request("GET / HTTP/1.1\r\nHost: x"))
+  end)
+end)
+
+describe("http.build_response", function()
+  it("includes status line and headers", function()
+    local resp = http.build_response(200, "OK", { ["Content-Type"] = "text/html" }, "body")
+    assert.truthy(resp:find("HTTP/1.1 200 OK", 1, true))
+    assert.truthy(resp:find("Content-Type: text/html", 1, true))
+    assert.truthy(resp:find("body", 1, true))
+  end)
+end)

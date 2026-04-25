@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Pre-commit hook: runs format-check and lint on staged Lua/TS files.
+# Install via: make install-hooks
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+pass() { echo -e "${GREEN}✓${NC} $1"; }
+fail() { echo -e "${RED}✗${NC} $1"; }
+warn() { echo -e "${YELLOW}!${NC} $1"; }
+
+FAILED=0
+
+# ── Lua format check (stylua) ─────────────────────────────────────────────────
+if command -v stylua &>/dev/null; then
+  if stylua --check lua/ tests/ 2>/dev/null; then
+    pass "stylua: Lua formatting OK"
+  else
+    fail "stylua: formatting issues found — run 'make format' to fix"
+    FAILED=1
+  fi
+else
+  warn "stylua not found — skipping Lua format check (install: cargo install stylua)"
+fi
+
+# ── Lua lint (luacheck) ───────────────────────────────────────────────────────
+if command -v luacheck &>/dev/null; then
+  if luacheck lua/ --globals vim bit --no-unused-args --quiet 2>/dev/null; then
+    pass "luacheck: no issues"
+  else
+    fail "luacheck: lint errors found"
+    FAILED=1
+  fi
+else
+  warn "luacheck not found — skipping Lua lint (install: luarocks install luacheck)"
+fi
+
+# ── TypeScript type check ─────────────────────────────────────────────────────
+if [ -f ui/node_modules/.bin/tsc ]; then
+  if (cd ui && npx tsc --noEmit --pretty false 2>/dev/null); then
+    pass "tsc: no type errors"
+  else
+    fail "tsc: type errors found — run 'make ui-typecheck' for details"
+    FAILED=1
+  fi
+else
+  warn "ui/node_modules not found — skipping TS check (run 'make build-ui' first)"
+fi
+
+# ── Exit ──────────────────────────────────────────────────────────────────────
+if [ "$FAILED" -ne 0 ]; then
+  echo ""
+  echo -e "${RED}Pre-commit checks failed. Fix the issues above and re-stage.${NC}"
+  exit 1
+fi
+
+echo ""
+echo -e "${GREEN}All pre-commit checks passed.${NC}"
+exit 0
