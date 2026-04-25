@@ -30,6 +30,19 @@
 local LanguageProvider = require("dataframe-preview.language.provider")
 local classes = require("dataframe-preview.utils.classes")
 
+-- The DAP adapter returns the Python repr() of the evaluated expression.
+-- For a string value this means the JSON is wrapped in single or double quotes:
+--   '{"shape": [366, 2], ...}'   ← what we receive
+--   {"shape": [366, 2], ...}     ← what vim.json.decode needs
+-- This helper strips exactly one layer of surrounding quotes.
+local function unwrap_python_string(s)
+  local first, last = s:sub(1, 1), s:sub(-1)
+  if (first == "'" and last == "'") or (first == '"' and last == '"') then
+    return s:sub(2, -2)
+  end
+  return s
+end
+
 ---@class PythonPandas : LanguageProvider
 local PythonPandas = setmetatable({}, { __index = LanguageProvider })
 
@@ -92,7 +105,7 @@ end
 ---@param raw string
 ---@return Metadata
 function PythonPandas:parse_metadata(raw)
-  local ok, decoded = pcall(vim.json.decode, raw)
+  local ok, decoded = pcall(vim.json.decode, unwrap_python_string(raw))
   if not ok or not decoded then
     error("PythonPandas: failed to parse metadata: " .. tostring(raw))
   end
@@ -110,7 +123,7 @@ end
 ---@param raw string
 ---@return any[][]
 function PythonPandas:parse_rows(raw)
-  local ok, decoded = pcall(vim.json.decode, raw)
+  local ok, decoded = pcall(vim.json.decode, unwrap_python_string(raw))
   if not ok or not decoded then
     error("PythonPandas: failed to parse rows: " .. tostring(raw))
   end
