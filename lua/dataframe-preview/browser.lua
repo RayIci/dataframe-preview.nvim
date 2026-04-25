@@ -12,7 +12,14 @@ function M.open(url)
   if os == "mac" then
     cmd = { "open", url }
   elseif os == "windows" then
+    -- Native Windows: cmd.exe is the shell, "start" opens the default browser.
+    -- The empty string "" is a required title argument for the start command.
     cmd = { "cmd", "/c", "start", "", url }
+  elseif os_utils.is_wsl() then
+    -- WSL reports as unix but runs inside Windows.
+    -- xdg-open has no Windows browser to talk to, so we call cmd.exe directly.
+    -- cmd.exe is always available in WSL's PATH via /mnt/c/Windows/System32.
+    cmd = { "cmd.exe", "/c", "start", "", url }
   else
     cmd = { "xdg-open", url }
   end
