@@ -86,6 +86,9 @@ end
 --                              NaN becomes float('nan') rather than numpy.nan
 -- .where(...notna(), None)   — replace NaN with None (→ JSON null)
 -- .values.tolist()           — convert to a plain Python list of lists
+-- default=str                — fallback serializer for any type json.dumps does
+--                              not know natively: Timestamp → "2024-01-01 00:00:00",
+--                              numpy.int64 → "42", Decimal → "3.14", etc.
 ---@param var_name string
 ---@param offset   integer
 ---@param limit    integer
@@ -93,7 +96,7 @@ end
 function PythonPandas:rows_expr(var_name, offset, limit)
   local slice = string.format("%s.iloc[%d:%d]", var_name, offset, offset + limit)
   return string.format(
-    "__import__('json').dumps(%s.astype(object).where(%s.notna(), None).values.tolist())",
+    "__import__('json').dumps(%s.astype(object).where(%s.notna(), None).values.tolist(), default=str)",
     slice,
     slice
   )
