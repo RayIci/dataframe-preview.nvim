@@ -1,9 +1,49 @@
+-- python_pandas.lua
+--
+-- LanguageProvider implementation for Python + Pandas DataFrames.
+--
+-- A LanguageProvider has two responsibilities:
+--   1. Build DAP evaluate expressions that extract data from the debugged
+--      process as JSON strings.
+--   2. Parse those JSON strings back into Lua tables.
+--
+-- ZERO CODE INJECTION PRINCIPLE
+--   The expressions below look like Python code, and they are — but they are
+--   evaluated by the debug adapter as read-only REPL expressions, exactly
+--   like typing them into the debug console.  Nothing is written to disk,
+--   no files are opened, no modules are imported permanently.  The expressions
+--   only READ data from the dataframe and serialise it as a string.
+--
+-- WHY __import__('json') INSTEAD OF import json?
+--   DAP evaluate requests are single expressions, not statements.  `import`
+--   is a statement in Python and cannot be used inside an expression.
+--   __import__('json') is the function call equivalent and works inside
+--   f-strings, comprehensions, and single-expression eval contexts.
+--
+-- WHY .astype(object).where(...notna(), None)?
+--   Pandas represents missing values as `NaN` (a float), which is not valid
+--   JSON.  json.dumps would produce the string "NaN" rather than `null`,
+--   breaking the decoder.  Calling .astype(object) and then .where(...notna(), None)
+--   replaces every NaN with Python None, which json.dumps correctly encodes
+--   as JSON null.
+
 local LanguageProvider = require("dataframe-preview.language.provider")
 local classes = require("dataframe-preview.utils.classes")
 
 ---@class PythonPandas : LanguageProvider
 local PythonPandas = setmetatable({}, { __index = LanguageProvider })
 
+-- Returns a Python expression that evaluates to a JSON string containing:
+--   { "shape": [rows, cols], "columns": [...], "dtypes": [...] }
+--
+-- Example for var_name = "df":
+--   __import__('json').dumps({
+--     'shape':   list(df.shape),          -- e.g. [50000, 5]
+--     'columns': df.columns.tolist(),     -- e.g. ["id", "name", ...]
+--     'dtypes':  df.dtypes.astype(str).tolist() -- e.g. ["int64", "object", ...]
+--   })
+---@param var_name string
+---@return string
 function PythonPandas:metadata_expr(var_name)
   return string.format(
     "__import__('json').dumps({"
@@ -17,6 +57,26 @@ function PythonPandas:metadata_expr(var_name)
   )
 end
 
+-- Returns a Python expression that evaluates to a JSON string containing
+-- a list of rows, each row being a list of cell values.
+--
+-- Example for var_name="df", offset=0, limit=100:
+--   __import__('json').dumps(
+--     df.iloc[0:100]
+--       .astype(object)
+--       .where(df.iloc[0:100].notna(), None)
+--       .values.tolist()
+--   )
+--
+-- .iloc[offset:offset+limit] — slice the requested rows (0-based, exclusive end)
+-- .astype(object)            — convert all columns to Python object dtype so
+--                              NaN becomes float('nan') rather than numpy.nan
+-- .where(...notna(), None)   — replace NaN with None (→ JSON null)
+-- .values.tolist()           — convert to a plain Python list of lists
+---@param var_name string
+---@param offset   integer
+---@param limit    integer
+---@return string
 function PythonPandas:rows_expr(var_name, offset, limit)
   local slice = string.format("%s.iloc[%d:%d]", var_name, offset, offset + limit)
   return string.format(
@@ -26,6 +86,9 @@ function PythonPandas:rows_expr(var_name, offset, limit)
   )
 end
 
+-- Parses the JSON string returned by metadata_expr into a Metadata table.
+-- Raises an error (caught by pcall in the orchestrator) if the string is not
+-- valid JSON or does not have the expected shape.
 ---@param raw string
 ---@return Metadata
 function PythonPandas:parse_metadata(raw)
@@ -33,6 +96,7 @@ function PythonPandas:parse_metadata(raw)
   if not ok or not decoded then
     error("PythonPandas: failed to parse metadata: " .. tostring(raw))
   end
+  -- decoded.shape is [rows, cols] — Lua tables are 1-indexed.
   return {
     row_count = decoded.shape[1],
     col_count = decoded.shape[2],
@@ -41,6 +105,8 @@ function PythonPandas:parse_metadata(raw)
   }
 end
 
+-- Parses the JSON string returned by rows_expr into a list of row arrays.
+-- Returns: { {val, val, ...}, {val, val, ...}, ... }
 ---@param raw string
 ---@return any[][]
 function PythonPandas:parse_rows(raw)
