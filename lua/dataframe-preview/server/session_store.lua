@@ -26,10 +26,11 @@
 --   happens when the server shuts down on VimLeavePre).
 
 ---@class Session
----@field var_name  string          -- variable name under the cursor, e.g. "df"
----@field frame_id  integer         -- DAP stack frame ID (scope for evaluate)
----@field metadata  Metadata|nil    -- shape/column info; nil before first fetch
----@field ws_client uv_tcp_t|nil    -- live WebSocket handle; nil before browser connects
+---@field var_name     string           -- variable name under the cursor, e.g. "df"
+---@field frame_id     integer          -- DAP stack frame ID (scope for evaluate)
+---@field metadata     Metadata|nil     -- shape/column info; nil before first fetch
+---@field ws_client    uv_tcp_t|nil     -- live WebSocket handle; nil before browser connects
+---@field lang_provider LanguageProvider -- provider resolved at preview time
 
 local M = {}
 

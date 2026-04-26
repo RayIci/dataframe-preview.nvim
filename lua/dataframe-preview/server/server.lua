@@ -44,7 +44,7 @@ local CONN_HTTP = "http"
 local CONN_WS = "ws"
 
 -- ---------------------------------------------------------------------------
--- handle_connection(client, dap_prov, lang_prov)
+-- handle_connection(client, dap_prov)
 --
 -- Called once for every browser connection that the listening socket accepts.
 -- It wires up a read callback on the raw TCP `client` handle and maintains a
@@ -66,7 +66,7 @@ local CONN_WS = "ws"
 --   The `while true` loop + `ws.decode` returning nil-on-incomplete handles
 --   all three cases correctly.
 -- ---------------------------------------------------------------------------
-local function handle_connection(client, dap_prov, lang_prov)
+local function handle_connection(client, dap_prov)
   -- `state` tracks which protocol phase this connection is in.
   local state = CONN_HTTP
 
@@ -200,7 +200,7 @@ local function handle_connection(client, dap_prov, lang_prov)
           --   next safe point in Neovim's own event loop iteration, where
           --   all Neovim APIs are guaranteed to be accessible.
           vim.schedule(function()
-            handlers.dispatch(frame.payload, client, dap_prov, lang_prov)
+            handlers.dispatch(frame.payload, client, dap_prov)
           end)
         end
         -- Binary frames (opcode 0x2) are not used by this protocol and are
@@ -211,7 +211,7 @@ local function handle_connection(client, dap_prov, lang_prov)
 end
 
 -- ---------------------------------------------------------------------------
--- M.ensure_started(dap_prov, lang_prov, callback)
+-- M.ensure_started(dap_prov, callback)
 --
 -- Idempotent server starter.  The first call binds a TCP socket, starts
 -- listening, and invokes `callback(port)`.  Every subsequent call just
@@ -221,7 +221,7 @@ end
 -- ephemeral port (typically in the range 49152–65535).  We query the
 -- actual assigned port with getsockname() immediately after bind.
 -- ---------------------------------------------------------------------------
-function M.ensure_started(dap_prov, lang_prov, callback)
+function M.ensure_started(dap_prov, callback)
   if M._running then
     -- Server is already up — nothing to do.
     callback(M._port)
@@ -254,7 +254,7 @@ function M.ensure_started(dap_prov, lang_prov, callback)
     tcp:accept(client)
 
     -- Hand the client connection off to our HTTP/WS handler.
-    handle_connection(client, dap_prov, lang_prov)
+    handle_connection(client, dap_prov)
   end)
 
   -- Read back the port the OS actually assigned.

@@ -1,5 +1,6 @@
 ---@class DataFramePreviewConfig
----@field debug boolean
+---@field debug          boolean
+---@field lang_providers table<string, LanguageProvider[]>|nil
 
 local M = {}
 

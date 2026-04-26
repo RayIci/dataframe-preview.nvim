@@ -51,19 +51,66 @@ local function generate_uuid()
 end
 
 -- ---------------------------------------------------------------------------
--- M.preview(dap_provider, lang_provider)
+-- resolve_provider(providers, dap_provider, frame_id, var_name, done_cb)
+--
+-- When a single provider is given it is used directly.  When multiple are
+-- given each one's can_handle_expr is evaluated via DAP sequentially; the
+-- one that returns true is selected.  Calls done_cb(provider, nil) on
+-- success or done_cb(nil, err) if 0 or >1 providers match.
+-- ---------------------------------------------------------------------------
+local function resolve_provider(providers, dap_provider, frame_id, var_name, done_cb)
+  if #providers == 1 then
+    done_cb(providers[1], nil)
+    return
+  end
+
+  local results = {}
+  local index = 0
+
+  local function check_next()
+    index = index + 1
+    if index > #providers then
+      local matched = {}
+      for _, r in ipairs(results) do
+        if r.matched then
+          matched[#matched + 1] = r.provider
+        end
+      end
+      if #matched == 0 then
+        done_cb(nil, "dataframe-preview: no provider can handle '" .. var_name .. "'")
+      elseif #matched > 1 then
+        done_cb(nil, "dataframe-preview: multiple providers matched '" .. var_name .. "'")
+      else
+        done_cb(matched[1], nil)
+      end
+      return
+    end
+
+    local provider = providers[index]
+    dap_provider:evaluate(provider:can_handle_expr(var_name), frame_id, function(err, result)
+      local ok, matched = pcall(provider.parse_can_handle, provider, result)
+      results[#results + 1] = { provider = provider, matched = not err and ok and matched }
+      check_next()
+    end)
+  end
+
+  check_next()
+end
+
+-- ---------------------------------------------------------------------------
+-- M.preview(dap_provider, lang_providers)
 --
 -- Entry point — called by commands.lua when the user runs :PreviewDataFrame.
 --
--- `dap_provider`  — an object that can talk to the active debugger
---                   (see dap/provider.lua for the interface)
--- `lang_provider` — an object that knows how to serialise the dataframe
---                   (see language/provider.lua for the interface)
+-- `dap_provider`   — an object that can talk to the active debugger
+--                    (see dap/provider.lua for the interface)
+-- `lang_providers` — list of LanguageProvider objects registered for the
+--                    current filetype (see language/provider.lua)
 --
 -- Both providers are injected here (not required directly) so they can be
 -- swapped out for other debuggers or languages without changing this file.
 -- ---------------------------------------------------------------------------
-function M.preview(dap_provider, lang_provider)
+function M.preview(dap_provider, lang_providers)
   -- Sanity-check that the DAP plugin is actually loaded before doing anything.
   if not dap_provider:is_available() then
     log.error("dataframe-preview: DAP provider is not available")
@@ -89,47 +136,60 @@ function M.preview(dap_provider, lang_provider)
       return
     end
 
-    -- ── Step 2: evaluate a metadata expression ─────────────────────────────
-    -- lang_provider:metadata_expr returns a read-only expression like:
-    --   __import__('json').dumps({'shape': list(df.shape), ...})
-    -- The debug adapter evaluates this in the paused Python process and
-    -- returns the result as a string.
-    local meta_expr = lang_provider:metadata_expr(var_name)
-
-    dap_provider:evaluate(meta_expr, frame_id, function(eval_err, result)
-      if eval_err then
-        log.error("dataframe-preview: failed to evaluate '" .. var_name .. "': " .. eval_err)
+    -- ── Step 2: resolve which provider handles this variable ──────────────
+    -- With a single provider this is a no-op fast path.  With multiple
+    -- providers each one's can_handle_expr is evaluated sequentially until
+    -- exactly one returns true.
+    resolve_provider(lang_providers, dap_provider, frame_id, var_name, function(lang_provider, resolve_err)
+      if resolve_err then
+        log.error(resolve_err)
         return
       end
 
-      -- ── Step 3: parse the metadata ───────────────────────────────────────
-      -- If the variable is not a DataFrame the expression will fail or
-      -- return something unparseable.  pcall turns that into a nil return
-      -- instead of an uncaught error.
-      local ok, metadata = pcall(lang_provider.parse_metadata, lang_provider, result)
-      if not ok then
-        log.error("dataframe-preview: '" .. var_name .. "' does not appear to be a DataFrame")
-        return
-      end
+      -- ── Step 3: evaluate a metadata expression ───────────────────────────
+      -- lang_provider:metadata_expr returns a read-only expression like:
+      --   __import__('json').dumps({'shape': list(df.shape), ...})
+      -- The debug adapter evaluates this in the paused Python process and
+      -- returns the result as a string.
+      local meta_expr = lang_provider:metadata_expr(var_name)
 
-      -- ── Step 4: register the session ─────────────────────────────────────
-      -- We store var_name + frame_id + metadata under a UUID so the
-      -- WebSocket handler can look them up when the browser connects.
-      local uuid = generate_uuid()
-      session_store.create(uuid, {
-        var_name = var_name,
-        frame_id = frame_id,
-        metadata = metadata,
-      })
+      dap_provider:evaluate(meta_expr, frame_id, function(eval_err, result)
+        if eval_err then
+          log.error("dataframe-preview: failed to evaluate '" .. var_name .. "': " .. eval_err)
+          return
+        end
 
-      -- ── Step 5 & 6: start server and open browser ─────────────────────────
-      -- ensure_started is idempotent — it only actually starts the server on
-      -- the first call.  The callback fires with the port number once the
-      -- server is ready (immediately if it was already running).
-      server.ensure_started(dap_provider, lang_provider, function(port)
-        local url = string.format("http://127.0.0.1:%d/?session=%s", port, uuid)
-        log.info("dataframe-preview: opening " .. var_name .. " (" .. metadata.row_count .. " rows)")
-        browser.open(url)
+        -- ── Step 4: parse the metadata ─────────────────────────────────────
+        -- If the variable is not a DataFrame the expression will fail or
+        -- return something unparseable.  pcall turns that into a nil return
+        -- instead of an uncaught error.
+        local ok, metadata = pcall(lang_provider.parse_metadata, lang_provider, result)
+        if not ok then
+          log.error("dataframe-preview: '" .. var_name .. "' does not appear to be a DataFrame")
+          return
+        end
+
+        -- ── Step 5: register the session ───────────────────────────────────
+        -- We store var_name + frame_id + metadata + lang_provider under a
+        -- UUID so the WebSocket handler can look them up when the browser
+        -- connects.
+        local uuid = generate_uuid()
+        session_store.create(uuid, {
+          var_name = var_name,
+          frame_id = frame_id,
+          metadata = metadata,
+          lang_provider = lang_provider,
+        })
+
+        -- ── Step 6 & 7: start server and open browser ─────────────────────
+        -- ensure_started is idempotent — it only actually starts the server
+        -- on the first call.  The callback fires with the port number once
+        -- the server is ready (immediately if it was already running).
+        server.ensure_started(dap_provider, function(port)
+          local url = string.format("http://127.0.0.1:%d/?session=%s", port, uuid)
+          log.info("dataframe-preview: opening " .. var_name .. " (" .. metadata.row_count .. " rows)")
+          browser.open(url)
+        end)
       end)
     end)
   end)

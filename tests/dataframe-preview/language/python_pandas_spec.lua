@@ -58,3 +58,40 @@ describe("PythonPandas.parse_rows", function()
     assert.equal("foo", rows[1][2])
   end)
 end)
+
+describe("PythonPandas.can_handle_expr", function()
+  local provider = PythonPandas.new()
+
+  it("includes the variable name", function()
+    assert.truthy(provider:can_handle_expr("my_df"):find("my_df", 1, true))
+  end)
+
+  it("uses isinstance and pandas.DataFrame", function()
+    local expr = provider:can_handle_expr("df")
+    assert.truthy(expr:find("isinstance", 1, true))
+    assert.truthy(expr:find("pandas", 1, true))
+    assert.truthy(expr:find("DataFrame", 1, true))
+  end)
+end)
+
+describe("PythonPandas.parse_can_handle", function()
+  local provider = PythonPandas.new()
+
+  it("returns true for unquoted True", function()
+    assert.is_true(provider:parse_can_handle("True"))
+  end)
+
+  it("returns true for single-quoted True (DAP string repr)", function()
+    assert.is_true(provider:parse_can_handle("'True'"))
+  end)
+
+  it("returns false for False", function()
+    assert.is_false(provider:parse_can_handle("False"))
+  end)
+
+  it("returns false for unexpected values", function()
+    assert.is_false(provider:parse_can_handle("None"))
+    assert.is_false(provider:parse_can_handle("true"))
+    assert.is_false(provider:parse_can_handle(""))
+  end)
+end)

@@ -121,6 +121,23 @@ function PythonPandas:parse_metadata(raw)
   }
 end
 
+-- Returns a Python expression that evaluates to True if var_name is a pandas
+-- DataFrame, False otherwise.  Used by the multi-provider resolution logic to
+-- pick the right provider when several are registered for the same filetype.
+---@param var_name string
+---@return string
+function PythonPandas:can_handle_expr(var_name)
+  return string.format("isinstance(%s, __import__('pandas').DataFrame)", var_name)
+end
+
+-- Parses the raw DAP result from can_handle_expr into a boolean.
+-- Python bools have repr "True"/"False"; DAP may also wrap them in quotes.
+---@param raw string
+---@return boolean
+function PythonPandas:parse_can_handle(raw)
+  return unwrap_python_string(raw) == "True"
+end
+
 -- Parses the JSON string returned by rows_expr into a list of row arrays.
 -- Returns: { {val, val, ...}, {val, val, ...}, ... }
 ---@param raw string

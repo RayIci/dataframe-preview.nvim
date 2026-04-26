@@ -100,12 +100,14 @@ end
 -- debug adapter and the result arrives in a callback.  The rest of the steps
 -- happen inside that callback.
 -- ---------------------------------------------------------------------------
-function M.on_fetch_rows(uuid, offset, limit, client, dap_provider, lang_provider)
+function M.on_fetch_rows(uuid, offset, limit, client, dap_provider)
   local session = session_store.get(uuid)
   if not session then
     send_error(client, "Unknown session: " .. uuid)
     return
   end
+
+  local lang_provider = session.lang_provider
 
   -- Build the language-specific DAP evaluate expression.
   -- For Python Pandas this looks like:
@@ -141,12 +143,12 @@ function M.on_fetch_rows(uuid, offset, limit, client, dap_provider, lang_provide
 end
 
 -- ---------------------------------------------------------------------------
--- M.dispatch(payload, client, dap_provider, lang_provider)
+-- M.dispatch(payload, client, dap_provider)
 --
 -- Entry point called by server.lua for every incoming WebSocket text frame.
 -- Decodes the JSON payload and routes to the right handler.
 -- ---------------------------------------------------------------------------
-function M.dispatch(payload, client, dap_provider, lang_provider)
+function M.dispatch(payload, client, dap_provider)
   -- Decode the JSON message.  pcall prevents a malformed JSON string from
   -- propagating an error up to the libuv callback and crashing the server.
   local ok, msg = pcall(vim.json.decode, payload)
@@ -160,7 +162,7 @@ function M.dispatch(payload, client, dap_provider, lang_provider)
   if msg_type == "init" then
     M.on_init(msg.session, client)
   elseif msg_type == "fetch_rows" then
-    M.on_fetch_rows(msg.session, msg.offset or 0, msg.limit or 100, client, dap_provider, lang_provider)
+    M.on_fetch_rows(msg.session, msg.offset or 0, msg.limit or 100, client, dap_provider)
   else
     log.warn("handlers: unknown message type: " .. tostring(msg_type))
   end
