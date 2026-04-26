@@ -13,17 +13,47 @@ export interface SortEntry {
   ascending: boolean;
 }
 
+// Discriminated union: a condition leaf or a group with children
 export interface FilterCondition {
+  type:     "condition";
   id:       string;   // client-only; stripped before sending to server
   column:   string;
   operator: string;
   value:    string;
 }
 
-export type FilterLogic = "AND" | "OR";
+export interface FilterGroup {
+  type:     "group";
+  id:       string;   // client-only; stripped before sending to server
+  logic:    "AND" | "OR";
+  children: FilterNode[];
+}
+
+export type FilterNode = FilterCondition | FilterGroup;
 
 let _fid = 0;
 export function newFilterId(): string { return String(++_fid); }
+
+export function emptyFilterTree(): FilterGroup {
+  return { type: "group", id: newFilterId(), logic: "AND", children: [] };
+}
+
+// Count all condition leaves recursively
+export function countConditions(node: FilterNode): number {
+  if (node.type === "condition") return 1;
+  return node.children.reduce((sum, c) => sum + countConditions(c), 0);
+}
+
+// True if the tree has at least one condition leaf
+export function hasActiveFilter(tree: FilterGroup): boolean {
+  return countConditions(tree) > 0;
+}
+
+// Check if any condition in the tree targets the given column
+export function hasConditionForCol(node: FilterNode, col: string): boolean {
+  if (node.type === "condition") return node.column === col;
+  return node.children.some((c) => hasConditionForCol(c, col));
+}
 
 type RowChunk = (string | number | boolean | null)[][];
 
@@ -34,8 +64,7 @@ interface DataStore {
   error:         string | null;
   wsStatus:      "connecting" | "open" | "closed" | "error";
   sort:          SortEntry[];
-  filter:        FilterCondition[];
-  filterLogic:   FilterLogic;
+  filterTree:    FilterGroup;
   scrollVersion: number;
 
   setMeta:       (meta: Meta) => void;
@@ -43,7 +72,7 @@ interface DataStore {
   setLoading:    (v: boolean) => void;
   setError:      (msg: string | null) => void;
   setWsStatus:   (s: DataStore["wsStatus"]) => void;
-  setSortFilter: (sort: SortEntry[], filter: FilterCondition[], logic: FilterLogic) => void;
+  setSortFilter: (sort: SortEntry[], filterTree: FilterGroup) => void;
   hasRows:       (offset: number) => boolean;
   getRow:        (index: number) => (string | number | boolean | null)[] | undefined;
 }
@@ -55,8 +84,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
   error:         null,
   wsStatus:      "connecting",
   sort:          [],
-  filter:        [],
-  filterLogic:   "AND",
+  filterTree:    emptyFilterTree(),
   scrollVersion: 0,
 
   setMeta:     (meta)   => set({ meta, loading: false }),
@@ -64,11 +92,10 @@ export const useDataStore = create<DataStore>((set, get) => ({
   setError:    (msg)    => set({ error: msg, loading: false }),
   setWsStatus: (s)      => set({ wsStatus: s }),
 
-  setSortFilter: (sort, filter, logic) =>
+  setSortFilter: (sort, filterTree) =>
     set((s) => ({
       sort,
-      filter,
-      filterLogic:   logic,
+      filterTree,
       rowCache:      new Map(),
       scrollVersion: s.scrollVersion + 1,
     })),

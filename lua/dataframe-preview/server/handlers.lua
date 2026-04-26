@@ -112,8 +112,7 @@ function M.on_fetch_rows(uuid, offset, limit, client, dap_provider)
   -- Build the language-specific DAP evaluate expression, incorporating any
   -- active sort and filter from the session so the slice is consistent with
   -- the current view state.
-  local expr =
-    lang_provider:rows_expr(session.var_name, offset, limit, session.sort, session.filter, session.filter_logic)
+  local expr = lang_provider:rows_expr(session.var_name, offset, limit, session.sort, session.filter_tree)
 
   -- Evaluate the expression in the debugger.
   -- `session.frame_id` pins the evaluation to the exact stack frame that was
@@ -144,13 +143,13 @@ function M.on_fetch_rows(uuid, offset, limit, client, dap_provider)
 end
 
 -- ---------------------------------------------------------------------------
--- M.on_apply_sort_filter(uuid, sort, filter, filter_logic, client, dap_provider)
+-- M.on_apply_sort_filter(uuid, sort, filter_tree, client, dap_provider)
 --
 -- Handles a sort/filter change from the browser.  Updates the session's sort
--- and filter state, re-evaluates metadata (to get the filtered row count), and
+-- and filter_tree, re-evaluates metadata (to get the filtered row count), and
 -- sends an updated "meta" message back so the frontend can resize the scroller.
 -- ---------------------------------------------------------------------------
-function M.on_apply_sort_filter(uuid, sort, filter, filter_logic, client, dap_provider)
+function M.on_apply_sort_filter(uuid, sort, filter_tree, client, dap_provider)
   local session = session_store.get(uuid)
   if not session then
     send_error(client, "Unknown session: " .. uuid)
@@ -158,11 +157,10 @@ function M.on_apply_sort_filter(uuid, sort, filter, filter_logic, client, dap_pr
   end
 
   session.sort = sort
-  session.filter = filter
-  session.filter_logic = filter_logic or "AND"
+  session.filter_tree = filter_tree or { type = "group", logic = "AND", children = {} }
 
   local lang_provider = session.lang_provider
-  local meta_expr = lang_provider:metadata_expr(session.var_name, session.filter, session.filter_logic)
+  local meta_expr = lang_provider:metadata_expr(session.var_name, session.filter_tree)
 
   dap_provider:evaluate(meta_expr, session.frame_id, function(err, result)
     if err then
@@ -211,14 +209,7 @@ function M.dispatch(payload, client, dap_provider)
   elseif msg_type == "fetch_rows" then
     M.on_fetch_rows(msg.session, msg.offset or 0, msg.limit or 100, client, dap_provider)
   elseif msg_type == "apply_sort_filter" then
-    M.on_apply_sort_filter(
-      msg.session,
-      msg.sort or {},
-      msg.filter or {},
-      msg.filter_logic or "AND",
-      client,
-      dap_provider
-    )
+    M.on_apply_sort_filter(msg.session, msg.sort or {}, msg.filter_tree, client, dap_provider)
   else
     log.warn("handlers: unknown message type: " .. tostring(msg_type))
   end

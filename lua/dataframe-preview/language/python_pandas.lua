@@ -49,48 +49,67 @@ local function py_str(s)
   return "'" .. s:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'"
 end
 
--- Returns a pandas boolean-index expression that applies all FilterCondition
--- items joined with the given logic operator ("AND" → & , "OR" → |).
--- Returns var_name unchanged when the filter list is nil or empty.
-local function build_filter_cond(var_name, filter, filter_logic)
-  if not filter or #filter == 0 then
+-- Recursively converts a FilterNode tree into a Python boolean expression string.
+-- Returns nil for nodes that contribute no condition (e.g. empty groups).
+local function build_filter_node(var_name, node)
+  if node.type == "condition" then
+    local col = py_str(node.column)
+    local val = py_str(node.value)
+    if node.operator == "contains" then
+      return string.format("(%s[%s].astype(str).str.contains(%s, case=False, na=False))", var_name, col, val)
+    elseif node.operator == "not_contains" then
+      return string.format("(~%s[%s].astype(str).str.contains(%s, case=False, na=False))", var_name, col, val)
+    elseif node.operator == "equals" then
+      return string.format("(%s[%s].astype(str) == %s)", var_name, col, val)
+    elseif node.operator == "not_equals" then
+      return string.format("(%s[%s].astype(str) != %s)", var_name, col, val)
+    elseif node.operator == "starts_with" then
+      return string.format("(%s[%s].astype(str).str.startswith(%s, na=False))", var_name, col, val)
+    elseif node.operator == "ends_with" then
+      return string.format("(%s[%s].astype(str).str.endswith(%s, na=False))", var_name, col, val)
+    elseif node.operator == "gt" then
+      return string.format("(%s[%s] > float(%s))", var_name, col, val)
+    elseif node.operator == "gte" then
+      return string.format("(%s[%s] >= float(%s))", var_name, col, val)
+    elseif node.operator == "lt" then
+      return string.format("(%s[%s] < float(%s))", var_name, col, val)
+    elseif node.operator == "lte" then
+      return string.format("(%s[%s] <= float(%s))", var_name, col, val)
+    end
+  elseif node.type == "group" then
+    if not node.children or #node.children == 0 then
+      return nil
+    end
+    local parts = {}
+    for _, child in ipairs(node.children) do
+      local expr = build_filter_node(var_name, child)
+      if expr then
+        parts[#parts + 1] = expr
+      end
+    end
+    if #parts == 0 then
+      return nil
+    end
+    if #parts == 1 then
+      return parts[1]
+    end
+    local joiner = (node.logic == "OR") and " | " or " & "
+    return "(" .. table.concat(parts, joiner) .. ")"
+  end
+  return nil
+end
+
+-- Applies a FilterNode tree to var_name, returning a .loc[...] expression or
+-- var_name unchanged when the tree is nil or produces no conditions.
+local function apply_filter_tree(var_name, filter_tree)
+  if not filter_tree then
     return var_name
   end
-  local conds = {}
-  for _, f in ipairs(filter) do
-    local col = py_str(f.column)
-    local val = py_str(f.value)
-    local c
-    if f.operator == "contains" then
-      c = string.format("%s[%s].astype(str).str.contains(%s, case=False, na=False)", var_name, col, val)
-    elseif f.operator == "not_contains" then
-      c = string.format("~%s[%s].astype(str).str.contains(%s, case=False, na=False)", var_name, col, val)
-    elseif f.operator == "equals" then
-      c = string.format("(%s[%s].astype(str) == %s)", var_name, col, val)
-    elseif f.operator == "not_equals" then
-      c = string.format("(%s[%s].astype(str) != %s)", var_name, col, val)
-    elseif f.operator == "starts_with" then
-      c = string.format("%s[%s].astype(str).str.startswith(%s, na=False)", var_name, col, val)
-    elseif f.operator == "ends_with" then
-      c = string.format("%s[%s].astype(str).str.endswith(%s, na=False)", var_name, col, val)
-    elseif f.operator == "gt" then
-      c = string.format("(%s[%s] > float(%s))", var_name, col, val)
-    elseif f.operator == "gte" then
-      c = string.format("(%s[%s] >= float(%s))", var_name, col, val)
-    elseif f.operator == "lt" then
-      c = string.format("(%s[%s] < float(%s))", var_name, col, val)
-    elseif f.operator == "lte" then
-      c = string.format("(%s[%s] <= float(%s))", var_name, col, val)
-    end
-    if c then
-      conds[#conds + 1] = c
-    end
-  end
-  if #conds == 0 then
+  local cond = build_filter_node(var_name, filter_tree)
+  if not cond then
     return var_name
   end
-  local joiner = (filter_logic == "OR") and " | " or " & "
-  return string.format("%s.loc[%s]", var_name, table.concat(conds, joiner))
+  return string.format("%s.loc[%s]", var_name, cond)
 end
 
 -- Wraps base_expr in a .sort_values() call when the sort list is non-empty.
@@ -117,14 +136,13 @@ local PythonPandas = setmetatable({}, { __index = LanguageProvider })
 -- Returns a Python expression that evaluates to a JSON string containing:
 --   { "shape": [rows, cols], "columns": [...], "dtypes": [...] }
 --
--- When `filter` is provided the shape reflects the filtered row count, while
+-- When filter_tree is provided the shape reflects the filtered row count, while
 -- columns and dtypes always come from the original (unfiltered) DataFrame.
----@param var_name     string
----@param filter       FilterCondition[]|nil
----@param filter_logic string|nil
+---@param var_name    string
+---@param filter_tree FilterNode|nil
 ---@return string
-function PythonPandas:metadata_expr(var_name, filter, filter_logic)
-  local base = build_filter_cond(var_name, filter, filter_logic)
+function PythonPandas:metadata_expr(var_name, filter_tree)
+  local base = apply_filter_tree(var_name, filter_tree)
   return string.format(
     "__import__('json').dumps({"
       .. "'shape': list(%s.shape),"
@@ -146,20 +164,15 @@ end
 --
 -- default=str — fallback serialiser for non-JSON-native types: Timestamp,
 --               numpy.int64, Decimal, etc.
----@param var_name     string
----@param offset       integer
----@param limit        integer
----@param sort         SortEntry[]|nil
----@param filter       FilterCondition[]|nil
----@param filter_logic string|nil
+---@param var_name    string
+---@param offset      integer
+---@param limit       integer
+---@param sort        SortEntry[]|nil
+---@param filter_tree FilterNode|nil
 ---@return string
-function PythonPandas:rows_expr(var_name, offset, limit, sort, filter, filter_logic)
-  local slice = string.format(
-    "%s.iloc[%d:%d]",
-    apply_sort(build_filter_cond(var_name, filter, filter_logic), sort),
-    offset,
-    offset + limit
-  )
+function PythonPandas:rows_expr(var_name, offset, limit, sort, filter_tree)
+  local slice =
+    string.format("%s.iloc[%d:%d]", apply_sort(apply_filter_tree(var_name, filter_tree), sort), offset, offset + limit)
   return string.format(
     "__import__('json').dumps(%s.pipe(lambda _s: _s.astype(object).where(_s.notna(), None)).values.tolist(), default=str)",
     slice

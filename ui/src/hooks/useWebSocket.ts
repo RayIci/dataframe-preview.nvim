@@ -1,7 +1,19 @@
 import { useEffect, useRef, useCallback } from "react";
-import { useDataStore, SortEntry, FilterCondition, FilterLogic } from "@/store/dataStore";
+import { useDataStore, SortEntry, FilterGroup, FilterNode } from "@/store/dataStore";
 
 const CHUNK_SIZE = 100;
+
+// Recursively strip client-only `id` fields before sending to the server
+function stripIds(node: FilterNode): object {
+  if (node.type === "condition") {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { id: _id, ...rest } = node;
+    return rest;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { id: _id, ...rest } = node;
+  return { ...rest, children: node.children.map(stripIds) };
+}
 
 export function useWebSocket(sessionId: string) {
   const wsRef      = useRef<WebSocket | null>(null);
@@ -21,20 +33,14 @@ export function useWebSocket(sessionId: string) {
     send({ type: "fetch_rows", session: sessionId, offset, limit: CHUNK_SIZE });
   }, [sessionId, send]);
 
-  const applySortFilter = useCallback((
-    sort: SortEntry[],
-    filter: FilterCondition[],
-    logic: FilterLogic,
-  ) => {
-    store.setSortFilter(sort, filter, logic);
+  const applySortFilter = useCallback((sort: SortEntry[], filterTree: FilterGroup) => {
+    store.setSortFilter(sort, filterTree);
     pendingRef.current.clear();
     send({
-      type: "apply_sort_filter",
-      session: sessionId,
+      type:        "apply_sort_filter",
+      session:     sessionId,
       sort,
-      // Strip client-only `id` before sending to server
-      filter: filter.map(({ column, operator, value }) => ({ column, operator, value })),
-      filter_logic: logic,
+      filter_tree: stripIds(filterTree),
     });
   }, [store, send, sessionId]);
 

@@ -180,8 +180,7 @@ function M.preview(dap_provider, lang_providers)
           metadata = metadata,
           lang_provider = lang_provider,
           sort = {},
-          filter = {},
-          filter_logic = "AND",
+          filter_tree = { type = "group", logic = "AND", children = {} },
         })
 
         -- ── Step 6 & 7: start server and open browser ─────────────────────

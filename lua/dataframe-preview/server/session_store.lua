@@ -31,9 +31,8 @@
 ---@field metadata     Metadata|nil     -- shape/column info; nil before first fetch
 ---@field ws_client    uv_tcp_t|nil     -- live WebSocket handle; nil before browser connects
 ---@field lang_provider LanguageProvider -- provider resolved at preview time
----@field sort         SortEntry[]        -- active multi-column sort (default: {})
----@field filter       FilterCondition[]  -- active filter conditions (default: {})
----@field filter_logic string             -- "AND" | "OR" (default: "AND")
+---@field sort         SortEntry[]  -- active multi-column sort (default: {})
+---@field filter_tree  FilterNode   -- active recursive filter tree (default: empty root group)
 
 local M = {}
 
