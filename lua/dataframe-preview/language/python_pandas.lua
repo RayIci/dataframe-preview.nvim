@@ -43,28 +43,95 @@ local function unwrap_python_string(s)
   return s
 end
 
+-- Wraps s as a Python single-quoted string literal, escaping backslashes and
+-- single quotes so the result is safe to embed in a generated Python expression.
+local function py_str(s)
+  return "'" .. s:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'"
+end
+
+-- Returns a pandas boolean-index expression that applies all FilterCondition
+-- items joined with the given logic operator ("AND" → & , "OR" → |).
+-- Returns var_name unchanged when the filter list is nil or empty.
+local function build_filter_cond(var_name, filter, filter_logic)
+  if not filter or #filter == 0 then
+    return var_name
+  end
+  local conds = {}
+  for _, f in ipairs(filter) do
+    local col = py_str(f.column)
+    local val = py_str(f.value)
+    local c
+    if f.operator == "contains" then
+      c = string.format("%s[%s].astype(str).str.contains(%s, case=False, na=False)", var_name, col, val)
+    elseif f.operator == "not_contains" then
+      c = string.format("~%s[%s].astype(str).str.contains(%s, case=False, na=False)", var_name, col, val)
+    elseif f.operator == "equals" then
+      c = string.format("(%s[%s].astype(str) == %s)", var_name, col, val)
+    elseif f.operator == "not_equals" then
+      c = string.format("(%s[%s].astype(str) != %s)", var_name, col, val)
+    elseif f.operator == "starts_with" then
+      c = string.format("%s[%s].astype(str).str.startswith(%s, na=False)", var_name, col, val)
+    elseif f.operator == "ends_with" then
+      c = string.format("%s[%s].astype(str).str.endswith(%s, na=False)", var_name, col, val)
+    elseif f.operator == "gt" then
+      c = string.format("(%s[%s] > float(%s))", var_name, col, val)
+    elseif f.operator == "gte" then
+      c = string.format("(%s[%s] >= float(%s))", var_name, col, val)
+    elseif f.operator == "lt" then
+      c = string.format("(%s[%s] < float(%s))", var_name, col, val)
+    elseif f.operator == "lte" then
+      c = string.format("(%s[%s] <= float(%s))", var_name, col, val)
+    end
+    if c then
+      conds[#conds + 1] = c
+    end
+  end
+  if #conds == 0 then
+    return var_name
+  end
+  local joiner = (filter_logic == "OR") and " | " or " & "
+  return string.format("%s.loc[%s]", var_name, table.concat(conds, joiner))
+end
+
+-- Wraps base_expr in a .sort_values() call when the sort list is non-empty.
+local function apply_sort(base_expr, sort)
+  if not sort or #sort == 0 then
+    return base_expr
+  end
+  local cols, ascs = {}, {}
+  for _, s in ipairs(sort) do
+    cols[#cols + 1] = py_str(s.column)
+    ascs[#ascs + 1] = s.ascending and "True" or "False"
+  end
+  return string.format(
+    "%s.sort_values([%s], ascending=[%s])",
+    base_expr,
+    table.concat(cols, ", "),
+    table.concat(ascs, ", ")
+  )
+end
+
 ---@class PythonPandas : LanguageProvider
 local PythonPandas = setmetatable({}, { __index = LanguageProvider })
 
 -- Returns a Python expression that evaluates to a JSON string containing:
 --   { "shape": [rows, cols], "columns": [...], "dtypes": [...] }
 --
--- Example for var_name = "df":
---   __import__('json').dumps({
---     'shape':   list(df.shape),          -- e.g. [50000, 5]
---     'columns': df.columns.tolist(),     -- e.g. ["id", "name", ...]
---     'dtypes':  df.dtypes.astype(str).tolist() -- e.g. ["int64", "object", ...]
---   })
----@param var_name string
+-- When `filter` is provided the shape reflects the filtered row count, while
+-- columns and dtypes always come from the original (unfiltered) DataFrame.
+---@param var_name     string
+---@param filter       FilterCondition[]|nil
+---@param filter_logic string|nil
 ---@return string
-function PythonPandas:metadata_expr(var_name)
+function PythonPandas:metadata_expr(var_name, filter, filter_logic)
+  local base = build_filter_cond(var_name, filter, filter_logic)
   return string.format(
     "__import__('json').dumps({"
       .. "'shape': list(%s.shape),"
       .. "'columns': %s.columns.tolist(),"
       .. "'dtypes': %s.dtypes.astype(str).tolist()"
       .. "})",
-    var_name,
+    base,
     var_name,
     var_name
   )
@@ -73,31 +140,28 @@ end
 -- Returns a Python expression that evaluates to a JSON string containing
 -- a list of rows, each row being a list of cell values.
 --
--- Example for var_name="df", offset=0, limit=100:
---   __import__('json').dumps(
---     df.iloc[0:100]
---       .astype(object)
---       .where(df.iloc[0:100].notna(), None)
---       .values.tolist()
---   )
+-- When sort/filter are provided the data is filtered, sorted, then sliced.
+-- .pipe(lambda _s: _s.astype(object).where(_s.notna(), None)) avoids
+-- evaluating the (potentially complex) slice expression twice.
 --
--- .iloc[offset:offset+limit] — slice the requested rows (0-based, exclusive end)
--- .astype(object)            — convert all columns to Python object dtype so
---                              NaN becomes float('nan') rather than numpy.nan
--- .where(...notna(), None)   — replace NaN with None (→ JSON null)
--- .values.tolist()           — convert to a plain Python list of lists
--- default=str                — fallback serializer for any type json.dumps does
---                              not know natively: Timestamp → "2024-01-01 00:00:00",
---                              numpy.int64 → "42", Decimal → "3.14", etc.
----@param var_name string
----@param offset   integer
----@param limit    integer
+-- default=str — fallback serialiser for non-JSON-native types: Timestamp,
+--               numpy.int64, Decimal, etc.
+---@param var_name     string
+---@param offset       integer
+---@param limit        integer
+---@param sort         SortEntry[]|nil
+---@param filter       FilterCondition[]|nil
+---@param filter_logic string|nil
 ---@return string
-function PythonPandas:rows_expr(var_name, offset, limit)
-  local slice = string.format("%s.iloc[%d:%d]", var_name, offset, offset + limit)
+function PythonPandas:rows_expr(var_name, offset, limit, sort, filter, filter_logic)
+  local slice = string.format(
+    "%s.iloc[%d:%d]",
+    apply_sort(build_filter_cond(var_name, filter, filter_logic), sort),
+    offset,
+    offset + limit
+  )
   return string.format(
-    "__import__('json').dumps(%s.astype(object).where(%s.notna(), None).values.tolist(), default=str)",
-    slice,
+    "__import__('json').dumps(%s.pipe(lambda _s: _s.astype(object).where(_s.notna(), None)).values.tolist(), default=str)",
     slice
   )
 end

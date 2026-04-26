@@ -1,6 +1,7 @@
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useDataStore } from "@/store/dataStore";
+import { Filter } from "lucide-react";
+import { useDataStore, SortEntry, FilterCondition, FilterLogic } from "@/store/dataStore";
 import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
@@ -9,12 +10,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { LoadingSkeleton } from "./LoadingSkeleton";
+import { FilterPanel } from "./FilterPanel";
 
 const ROW_HEIGHT   = 32;
 const CHUNK_SIZE   = 100;
 const PREFETCH_GAP = 20;
 
-// Map pandas dtype prefixes to a readable badge variant
 function dtypeBadge(dtype: string): { label: string; variant: "default" | "secondary" | "outline" } {
   if (dtype.startsWith("int") || dtype.startsWith("uint") || dtype.startsWith("float"))
     return { label: dtype, variant: "default" };
@@ -24,25 +25,33 @@ function dtypeBadge(dtype: string): { label: string; variant: "default" | "secon
 }
 
 interface DataGridProps {
-  fetchRows: (offset: number) => void;
+  fetchRows:       (offset: number) => void;
+  applySortFilter: (sort: SortEntry[], filter: FilterCondition[], logic: FilterLogic) => void;
 }
 
-export function DataGrid({ fetchRows }: DataGridProps) {
-  const { meta, loading, error, getRow, hasRows } = useDataStore();
+export function DataGrid({ fetchRows, applySortFilter }: DataGridProps) {
+  const { meta, loading, error, getRow, hasRows, sort, filter, filterLogic, scrollVersion } = useDataStore();
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
+  const [filterInitialCol, setFilterInitialCol] = useState<string | null>(null);
 
   const rowCount = meta?.row_count ?? 0;
 
   const virtualizer = useVirtualizer({
-    count:           rowCount,
+    count:            rowCount,
     getScrollElement: () => scrollRef.current,
-    estimateSize:    () => ROW_HEIGHT,
-    overscan:        5,
+    estimateSize:     () => ROW_HEIGHT,
+    overscan:         5,
   });
 
   const items = virtualizer.getVirtualItems();
 
-  // Prefetch chunks when approaching the edge of loaded data
+  // Scroll to top whenever sort/filter changes
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [scrollVersion]);
+
   const prefetch = useCallback(() => {
     if (!items.length) return;
     const lastIndex = items[items.length - 1].index;
@@ -53,6 +62,23 @@ export function DataGrid({ fetchRows }: DataGridProps) {
   }, [items, rowCount, hasRows, fetchRows]);
 
   useEffect(() => { prefetch(); }, [prefetch]);
+
+  // Click on column header always adds/cycles that column in the sort list.
+  // off → asc → desc → off  without touching other columns.
+  const handleSortClick = useCallback((col: string) => {
+    const existing = sort.find((s) => s.column === col);
+    let newSort: SortEntry[];
+    if (!existing)
+      newSort = [...sort, { column: col, ascending: true }];
+    else if (existing.ascending)
+      newSort = sort.map((s) => s.column === col ? { ...s, ascending: false } : s);
+    else
+      newSort = sort.filter((s) => s.column !== col);
+    applySortFilter(newSort, filter, filterLogic);
+  }, [sort, filter, filterLogic, applySortFilter]);
+
+  const clearAllSort   = () => applySortFilter([], filter, filterLogic);
+  const clearAllFilter = () => applySortFilter(sort, [], filterLogic);
 
   if (error) {
     return (
@@ -72,33 +98,133 @@ export function DataGrid({ fetchRows }: DataGridProps) {
   return (
     <TooltipProvider delayDuration={300}>
       <div className="flex flex-col flex-1 overflow-hidden">
-        {/* Sticky header */}
+        {/* Sticky column headers */}
         <div
           className="flex shrink-0 border-b border-border bg-card text-xs font-medium text-muted-foreground"
           style={{ minWidth: `${colCount * 120}px` }}
         >
-          {/* Row index header */}
           <div className="w-14 shrink-0 px-2 py-2 text-right border-r border-border">#</div>
           {meta.columns.map((col, i) => {
             const { label, variant } = dtypeBadge(meta.dtypes[i] ?? "");
+            const sortEntry  = sort.find((s) => s.column === col);
+            const sortIdx    = sortEntry ? sort.indexOf(sortEntry) : -1;
+            const isFiltered = filter.some((fc) => fc.column === col);
+
             return (
               <div
                 key={i}
-                className="flex items-center gap-1.5 px-2 py-2 border-r border-border last:border-r-0 overflow-hidden"
+                className="relative flex items-center gap-1 px-2 py-2 border-r border-border last:border-r-0 overflow-visible select-none"
                 style={{ width: colWidth, minWidth: colWidth }}
               >
-                <span className="truncate text-foreground">{col}</span>
-                <Badge variant={variant} className="shrink-0">{label}</Badge>
+                {/* Sortable area — click to add/toggle this column in the sort list */}
+                <button
+                  className="flex items-center gap-1 flex-1 min-w-0 cursor-pointer hover:text-foreground text-left"
+                  onClick={() => handleSortClick(col)}
+                  title="Click to sort · click again to reverse · click again to remove"
+                >
+                  {sortEntry && (
+                    <span className="shrink-0 text-blue-400 text-[10px] font-bold leading-none">
+                      {sortEntry.ascending ? "↑" : "↓"}
+                      {sort.length > 1 ? sortIdx + 1 : ""}
+                    </span>
+                  )}
+                  <span className="truncate text-foreground">{col}</span>
+                  <Badge variant={variant} className="shrink-0">{label}</Badge>
+                </button>
+
+                {/* Filter toggle — opens the global filter builder panel */}
+                <button
+                  className={`shrink-0 rounded p-0.5 hover:bg-muted transition-colors ${
+                    isFiltered ? "text-amber-400" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => { setFilterInitialCol(col); setFilterPanelOpen(true); }}
+                  title="Open filter builder"
+                >
+                  <Filter size={11} />
+                </button>
               </div>
             );
           })}
         </div>
 
+        {/* Active sort / filter chips */}
+        {(sort.length > 0 || filter.length > 0) && (
+          <div
+            className="flex flex-wrap items-center gap-1 px-2 py-1 border-b border-border bg-card/80 text-xs shrink-0"
+            style={{ minWidth: `${colCount * 120}px` }}
+          >
+            {sort.length > 0 && (
+              <>
+                <span className="text-muted-foreground">Sort:</span>
+                {sort.map((s, i) => (
+                  <span
+                    key={s.column}
+                    className="inline-flex items-center gap-0.5 rounded bg-blue-950 px-1.5 py-0.5 text-blue-300"
+                  >
+                    {s.ascending ? "↑" : "↓"} {s.column}
+                    <button
+                      className="ml-0.5 hover:text-white"
+                      onClick={() => applySortFilter(sort.filter((_, j) => j !== i), filter, filterLogic)}
+                      title={`Remove sort on ${s.column}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+                <button className="text-muted-foreground hover:text-foreground" onClick={clearAllSort}>
+                  clear
+                </button>
+                {filter.length > 0 && <span className="mx-1 text-border">|</span>}
+              </>
+            )}
+            {filter.length > 0 && (
+              <>
+                <span className="text-muted-foreground">Filter ({filterLogic}):</span>
+                {filter.map((fc) => {
+                  const preview = fc.value.length > 10 ? fc.value.slice(0, 10) + "…" : fc.value;
+                  return (
+                    <span
+                      key={fc.id}
+                      className="inline-flex items-center gap-0.5 rounded bg-amber-950 px-1.5 py-0.5 text-amber-300"
+                    >
+                      {fc.column} {fc.operator} &ldquo;{preview}&rdquo;
+                      <button
+                        className="ml-0.5 hover:text-white"
+                        onClick={() => applySortFilter(sort, filter.filter((c) => c.id !== fc.id), filterLogic)}
+                        title={`Remove this filter`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })}
+                <button className="text-muted-foreground hover:text-foreground" onClick={clearAllFilter}>
+                  clear
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Global filter builder panel (fixed overlay) */}
+        {filterPanelOpen && meta && (
+          <FilterPanel
+            columns={meta.columns}
+            dtypes={meta.dtypes}
+            conditions={filter}
+            logic={filterLogic}
+            initialCol={filterInitialCol ?? undefined}
+            onApply={(conditions, logic) => {
+              applySortFilter(sort, conditions, logic);
+              setFilterPanelOpen(false);
+            }}
+            onClose={() => setFilterPanelOpen(false)}
+          />
+        )}
+
         {/* Virtual scroll body */}
         <div ref={scrollRef} className="flex-1 overflow-auto">
-          <div
-            style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}
-          >
+          <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
             {items.map((vRow) => {
               const row = getRow(vRow.index);
               return (
@@ -109,11 +235,9 @@ export function DataGrid({ fetchRows }: DataGridProps) {
                   className="absolute flex w-full border-b border-border/50 text-xs hover:bg-muted/30"
                   style={{ top: vRow.start, minWidth: `${colCount * 120}px` }}
                 >
-                  {/* Row index */}
                   <div className="w-14 shrink-0 px-2 py-1.5 text-right text-muted-foreground border-r border-border/50">
                     {vRow.index}
                   </div>
-
                   {row ? (
                     row.map((cell, ci) => {
                       const display = cell === null ? "null" : String(cell);
@@ -140,7 +264,6 @@ export function DataGrid({ fetchRows }: DataGridProps) {
                       );
                     })
                   ) : (
-                    // Row not yet fetched — show skeleton cells
                     Array.from({ length: colCount }).map((_, ci) => (
                       <div
                         key={ci}

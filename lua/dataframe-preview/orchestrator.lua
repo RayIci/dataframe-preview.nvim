@@ -179,6 +179,9 @@ function M.preview(dap_provider, lang_providers)
           frame_id = frame_id,
           metadata = metadata,
           lang_provider = lang_provider,
+          sort = {},
+          filter = {},
+          filter_logic = "AND",
         })
 
         -- ── Step 6 & 7: start server and open browser ─────────────────────

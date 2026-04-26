@@ -5,7 +5,7 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 const sessionId = new URLSearchParams(window.location.search).get("session") ?? "";
 
 export function App() {
-  const { fetchRows } = useWebSocket(sessionId);
+  const { fetchRows, applySortFilter } = useWebSocket(sessionId);
 
   if (!sessionId) {
     return (
@@ -18,7 +18,7 @@ export function App() {
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <StatusBar />
-      <DataGrid fetchRows={fetchRows} />
+      <DataGrid fetchRows={fetchRows} applySortFilter={applySortFilter} />
     </div>
   );
 }

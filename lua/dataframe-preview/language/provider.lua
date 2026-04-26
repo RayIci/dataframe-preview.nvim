@@ -6,22 +6,36 @@ local classes = require("dataframe-preview.utils.classes")
 ---@field columns  string[]
 ---@field dtypes   string[]
 
+---@class SortEntry
+---@field column    string   -- column name to sort by
+---@field ascending boolean  -- true = ascending, false = descending
+
+---@class FilterCondition
+---@field column   string  -- column name to filter on
+---@field operator string  -- "contains"|"not_contains"|"equals"|"not_equals"|"starts_with"|"ends_with"|"gt"|"gte"|"lt"|"lte"
+---@field value    string  -- filter value (always a string; numeric conversions happen in the expression)
+
 ---@class LanguageProvider
 local LanguageProvider = {}
 
 ---Returns a read-only DAP evaluate expression that produces JSON metadata.
----@param var_name string
+---@param var_name     string
+---@param filter       FilterCondition[]|nil  -- optional; when present, row_count reflects filtered result
+---@param filter_logic string|nil             -- "AND" | "OR"; defaults to "AND"
 ---@return string
-function LanguageProvider:metadata_expr(var_name)
+function LanguageProvider:metadata_expr(var_name, filter, filter_logic)
   classes.not_implemented_error("LanguageProvider:metadata_expr")
 end
 
 ---Returns a read-only DAP evaluate expression that produces a JSON array of rows.
----@param var_name string
----@param offset   integer
----@param limit    integer
+---@param var_name     string
+---@param offset       integer
+---@param limit        integer
+---@param sort         SortEntry[]|nil         -- optional multi-column sort
+---@param filter       FilterCondition[]|nil   -- optional column filters
+---@param filter_logic string|nil              -- "AND" | "OR"; defaults to "AND"
 ---@return string
-function LanguageProvider:rows_expr(var_name, offset, limit)
+function LanguageProvider:rows_expr(var_name, offset, limit, sort, filter, filter_logic)
   classes.not_implemented_error("LanguageProvider:rows_expr")
 end
 
