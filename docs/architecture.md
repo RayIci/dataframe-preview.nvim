@@ -48,7 +48,8 @@ The plugin is built around three boundaries:
 ```
 user presses <leader>dp
   → vim.api.nvim_create_user_command callback
-  → orchestrator.preview(dap_provider, lang_provider)
+  → orchestrator.preview(dap_provider, lang_providers)
+    -- lang_providers is table<string, LanguageProvider[]> keyed by filetype
 ```
 
 ### 2. DAP frame resolution
@@ -63,9 +64,31 @@ end)
 
 This is asynchronous: the DAP request goes over a JSON-RPC socket to the debug adapter. The callback is fired via `vim.schedule` (Neovim main thread) when the response arrives.
 
+### 2a. Provider resolution
+
+```lua
+-- orchestrator.lua → resolve_provider()
+local ft = vim.bo.filetype
+local providers = lang_providers[ft]  -- array of LanguageProvider
+
+-- If only one provider is registered it is used directly (no DAP round-trip).
+-- Otherwise each provider's can_handle_expr is evaluated in order:
+for _, provider in ipairs(providers) do
+  local expr = provider:can_handle_expr(var_name)
+  dap_provider:evaluate(expr, frame_id, function(err, raw)
+    if provider:parse_can_handle(raw) then
+      -- this provider is stored in the session and used for all subsequent steps
+    end
+  end)
+end
+```
+
+The resolved provider is stored in the session so that both metadata evaluation (Step 3) and row fetching (Step 8) use the same provider without re-resolving.
+
 ### 3. Metadata evaluation
 
 ```lua
+-- lang_provider is the single provider selected by Step 2a.
 -- The expression is pure read-only Python:
 -- __import__('json').dumps({'shape': list(df.shape),
 --                           'columns': df.columns.tolist(),
@@ -96,7 +119,7 @@ The session lives in a Lua table keyed by UUID. The UUID is embedded in the brow
 ### 5. Server start (lazy)
 
 ```lua
-server.ensure_started(dap_provider, lang_provider, function(port)
+server.ensure_started(dap_provider, function(port)
   browser.open("http://127.0.0.1:" .. port .. "/?session=" .. uuid)
 end)
 ```

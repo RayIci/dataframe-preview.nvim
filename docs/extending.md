@@ -12,10 +12,12 @@ The plugin is built around two interfaces: `LanguageProvider` and `DapProvider`.
 -- lua/dataframe-preview/language/provider.lua
 
 ---@class LanguageProvider
--- :metadata_expr(var_name)          → string   (DAP evaluate expression)
--- :rows_expr(var_name, offset, limit) → string (DAP evaluate expression)
--- :parse_metadata(raw)              → Metadata
--- :parse_rows(raw)                  → any[][]
+-- :metadata_expr(var_name)            → string   (DAP evaluate expression)
+-- :rows_expr(var_name, offset, limit) → string   (DAP evaluate expression)
+-- :parse_metadata(raw)                → Metadata
+-- :parse_rows(raw)                    → any[][]
+-- :can_handle_expr(var_name)          → string   (DAP evaluate expression → bool)
+-- :parse_can_handle(raw)              → boolean
 ```
 
 The expressions are sent verbatim to the DAP adapter's `evaluate` endpoint. They must be **read-only** (no side effects) and must return a **JSON string** that your `parse_*` methods can decode.
@@ -59,6 +61,15 @@ end
 
 function MyProvider:parse_rows(raw)
   return vim.json.decode(raw)
+end
+
+function MyProvider:can_handle_expr(var_name)
+  -- Must return a DAP expression that evaluates to a truthy/falsy string
+  return string.format("isinstance(%s, MyType)", var_name)
+end
+
+function MyProvider:parse_can_handle(raw)
+  return raw == "True"
 end
 
 function MyProvider.new()
@@ -115,6 +126,14 @@ function PythonPolars:parse_rows(raw)
   return vim.json.decode(raw)
 end
 
+function PythonPolars:can_handle_expr(var_name)
+  return string.format("isinstance(%s, __import__('polars').DataFrame)", var_name)
+end
+
+function PythonPolars:parse_can_handle(raw)
+  return raw == "True"
+end
+
 function PythonPolars.new()
   return classes.new(PythonPolars)
 end
@@ -126,7 +145,9 @@ Usage:
 
 ```lua
 require("dataframe-preview").setup({
-  lang_provider = require("dataframe-preview.language.python_polars").new(),
+  lang_providers = {
+    python = { require("dataframe-preview.language.python_polars").new() },
+  },
 })
 ```
 
@@ -166,24 +187,27 @@ end
 
 > **Note:** The complexity of C++ expressions depends heavily on the debugger and adapter (GDB, LLDB, VS Code's cpptools). Test your expressions in the DAP REPL first.
 
-### Auto-detecting the language
+### Multiple providers per filetype
 
-If you want the plugin to pick a provider automatically based on the file type or DAP session:
+Register an array of providers for each filetype. When `:PreviewDataFrame` runs, the plugin evaluates each provider's `can_handle_expr` via DAP in order and selects the first one whose `parse_can_handle` returns `true`. This lets you support Pandas and Polars in the same Python session without any manual switching.
 
 ```lua
--- In your setup or a wrapper module:
-local ft = vim.bo.filetype
-local lang_provider
-
-if ft == "python" then
-  -- Could auto-detect Polars vs Pandas at evaluation time
-  lang_provider = require("dataframe-preview.language.python_pandas").new()
-elseif ft == "cpp" then
-  lang_provider = require("my.providers.cpp_eigen").new()
-end
-
-require("dataframe-preview").setup({ lang_provider = lang_provider })
+require("dataframe-preview").setup({
+  lang_providers = {
+    python = {
+      require("dataframe-preview.language.python_pandas").new(),
+      require("dataframe-preview.language.python_polars").new(),
+    },
+    cpp = {
+      require("my.providers.cpp_eigen").new(),
+    },
+  },
+})
 ```
+
+If only one provider is registered for the current filetype, the `can_handle_expr` check is skipped and that provider is used directly.
+
+If no provider matches (or none is configured for the filetype), an error is shown via `vim.notify`.
 
 ---
 
@@ -297,17 +321,17 @@ end
 
 ## Registering a custom provider via setup
 
-The `setup` function accepts `dap_provider` and `lang_provider` overrides directly:
+The `setup` function accepts `dap_provider` and `lang_providers` overrides directly:
 
 ```lua
 require("dataframe-preview").setup({
   dap_provider  = require("my.providers.vimspector").new(),
-  lang_provider = require("my.providers.python_polars").new(),
+  lang_providers = {
+    python = { require("my.providers.python_polars").new() },
+  },
   debug         = false,
 })
 ```
-
-> `init.lua` will need a small update to forward these opts to the orchestrator. See the note at the bottom of `lua/dataframe-preview/init.lua` — the current MVP wires `NvimDap` and `PythonPandas` directly. Adding `opts.dap_provider` and `opts.lang_provider` fallback is a one-line change per provider.
 
 ---
 

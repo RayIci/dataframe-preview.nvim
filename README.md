@@ -85,12 +85,20 @@ use {
 require("dataframe-preview").setup({
   -- Enable debug-level logging via vim.notify
   debug = false,  -- default
+
+  -- Providers per filetype. Each entry is an array; when multiple providers
+  -- are listed the plugin evaluates can_handle_expr for each in order and
+  -- picks the first match. Omit to use the built-in Pandas provider for Python.
+  lang_providers = {
+    python = { require("dataframe-preview.language.python_pandas").new() },
+  },
 })
 ```
 
-| Option  | Type      | Default | Description                                |
-| ------- | --------- | ------- | ------------------------------------------ |
-| `debug` | `boolean` | `false` | Enables verbose `DEBUG`-level log messages |
+| Option           | Type                                | Default           | Description                                                                                                            |
+| ---------------- | ----------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `debug`          | `boolean`                           | `false`           | Enables verbose `DEBUG`-level log messages                                                                             |
+| `lang_providers` | `table<string, LanguageProvider[]>` | Pandas for Python | Providers per filetype. Multiple providers are tried in order; the first whose `can_handle_expr` returns true is used. |
 
 ---
 
@@ -176,6 +184,15 @@ function MyProvider:parse_rows(raw)
   return vim.json.decode(raw)
 end
 
+function MyProvider:can_handle_expr(var_name)
+  -- Must return a DAP expression that evaluates to a truthy/falsy string
+  return string.format("isinstance(%s, MyType)", var_name)
+end
+
+function MyProvider:parse_can_handle(raw)
+  return raw == "True"
+end
+
 function MyProvider.new() return classes.new(MyProvider) end
 ```
 
@@ -183,7 +200,9 @@ Then pass it to `setup`:
 
 ```lua
 require("dataframe-preview").setup({
-  lang_provider = MyProvider.new(),
+  lang_providers = {
+    python = { MyProvider.new() },
+  },
 })
 ```
 
