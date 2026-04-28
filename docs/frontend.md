@@ -75,6 +75,7 @@ ui/src/
 │
 ├── components/
 │   ├── DataGrid.tsx       # Virtual table (TanStack Virtual + shadcn Table)
+│   ├── FilterPanel.tsx    # Sort and filter UI; sends apply_sort_filter over WebSocket
 │   ├── StatusBar.tsx      # Variable name, counts, WS status indicator
 │   ├── LoadingSkeleton.tsx # Skeleton rows during initial load
 │   └── ui/               # shadcn/ui primitives
@@ -94,11 +95,13 @@ The Zustand store (`store/dataStore.ts`) holds all shared state:
 
 ```ts
 interface DataStore {
-  meta:     Meta | null;           // column names, dtypes, row/col counts
-  rowCache: Map<number, RowChunk>; // offset → 100-row chunk
-  loading:  boolean;
-  error:    string | null;
-  wsStatus: "connecting" | "open" | "closed" | "error";
+  meta:        Meta | null;           // column names, dtypes, row/col counts
+  rowCache:    Map<number, RowChunk>; // offset → 100-row chunk
+  loading:     boolean;
+  error:       string | null;
+  wsStatus:    "connecting" | "open" | "closed" | "error";
+  sort:        SortEntry[];           // active multi-column sort
+  filterTree:  FilterNode;            // active recursive AND/OR filter tree
 }
 ```
 
@@ -166,10 +169,14 @@ useEffect(() => {
   sock.onopen  = () => sock.send(JSON.stringify({ type:"init", session: sessionId }));
   sock.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    if      (msg.type === "meta")  store.setMeta(msg);
+    if      (msg.type === "meta")  store.setMeta(msg);      // initial meta + after sort/filter
     else if (msg.type === "rows")  store.addRows(msg.offset, msg.data);
     else if (msg.type === "error") store.setError(msg.message);
   };
+
+  // Sending sort/filter changes (called by FilterPanel):
+  // sock.send(JSON.stringify({ type:"apply_sort_filter", session: sessionId,
+  //                            sort: [{column, ascending}], filter_tree: {…} }));
 
   return () => sock.close();
 }, [sessionId]);

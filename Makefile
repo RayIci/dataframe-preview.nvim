@@ -36,14 +36,14 @@ lint: ## Lint Lua files with luacheck
 
 # ── Frontend ──────────────────────────────────────────────────────────────────
 
-build-ui: ## Install npm deps and build the frontend to ui/dist/index.html
-	cd ui && npm install && npm run build
+build-ui: ## Install bun deps and build the frontend to ui/dist/index.html
+	cd ui && bun install && bun run build
 
 ui-dev: ## Start the Vite dev server for frontend development
-	cd ui && npm run dev
+	cd ui && bun run dev
 
 ui-typecheck: ## Run TypeScript type checking without emitting files
-	cd ui && npx tsc --noEmit
+	cd ui && bunx tsc --noEmit
 
 # ── Git hooks ─────────────────────────────────────────────────────────────────
 

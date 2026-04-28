@@ -35,6 +35,7 @@ local M = {
   _tcp = nil, ---@type uv_tcp_t|nil  the listening socket handle
   _port = nil, ---@type integer|nil   the OS-assigned port number
   _running = false, -- true once the server is listening
+  _clients = {}, ---@type table<uv_tcp_t, boolean>  all active WebSocket connections
 }
 
 -- Labels for the two phases a connection can be in.
@@ -80,7 +81,8 @@ local function handle_connection(client, dap_prov)
   -- is nil when the remote side closed normally.
   client:read_start(function(err, chunk)
     if err or not chunk then
-      -- Connection closed or errored — release the OS handle.
+      -- Connection closed or errored — release the OS handle and deregister.
+      M._clients[client] = nil
       client:close()
       return
     end
@@ -110,8 +112,10 @@ local function handle_connection(client, dap_prov)
         local response = ws.handshake(req)
         client:write(response)
 
-        -- Switch the connection into WebSocket mode.
+        -- Switch the connection into WebSocket mode and register the client
+        -- in the global set so broadcast() can reach it.
         state = CONN_WS
+        M._clients[client] = true
 
         -- Discard the HTTP bytes we already parsed; any remaining bytes in
         -- `buf` would be the start of WebSocket frame data (rare but possible
@@ -173,6 +177,7 @@ local function handle_connection(client, dap_prov)
           -- Browser is closing the tab or calling ws.close().
           -- RFC 6455 requires the server to echo a close frame before
           -- shutting down its side of the connection.
+          M._clients[client] = nil
           client:write(ws.encode_json({ type = "close" }))
           client:close()
           return
@@ -281,6 +286,24 @@ function M.ensure_started(dap_prov, callback)
   callback(M._port)
 end
 
+-- Broadcast a JSON-encodable table to all connected WebSocket clients.
+-- Safe to call from any context: client:write() is a pure libuv operation.
+-- pcall guards against a handle that was closed between the pairs() iteration
+-- start and the write (possible if a close event fires on another coroutine).
+function M.broadcast(tbl)
+  local frame = ws.encode_json(tbl)
+  for client in pairs(M._clients) do
+    pcall(function()
+      client:write(frame)
+    end)
+  end
+end
+
+-- Returns true if at least one browser tab has an active WebSocket connection.
+function M.has_connected_clients()
+  return next(M._clients) ~= nil
+end
+
 -- Closes the listening socket and resets module state.
 -- Called automatically on VimLeavePre; can also be called manually.
 function M.stop()
@@ -288,6 +311,7 @@ function M.stop()
     M._tcp:close()
     M._tcp = nil
   end
+  M._clients = {}
   M._running = false
   M._port = nil
   log.debug("server: stopped")

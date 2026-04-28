@@ -12,8 +12,8 @@ The plugin is built around two interfaces: `LanguageProvider` and `DapProvider`.
 -- lua/dataframe-preview/language/provider.lua
 
 ---@class LanguageProvider
--- :metadata_expr(var_name)            → string   (DAP evaluate expression)
--- :rows_expr(var_name, offset, limit) → string   (DAP evaluate expression)
+-- :metadata_expr(var_name, filter_tree)            → string   (DAP evaluate expression)
+-- :rows_expr(var_name, offset, limit, sort, filter_tree) → string   (DAP evaluate expression)
 -- :parse_metadata(raw)                → Metadata
 -- :parse_rows(raw)                    → any[][]
 -- :can_handle_expr(var_name)          → string   (DAP evaluate expression → bool)
@@ -39,13 +39,17 @@ local classes          = require("dataframe-preview.utils.classes")
 ---@class MyProvider : LanguageProvider
 local MyProvider = setmetatable({}, { __index = LanguageProvider })
 
-function MyProvider:metadata_expr(var_name)
-  -- Must produce a JSON string with keys: shape, columns, dtypes
+function MyProvider:metadata_expr(var_name, filter_tree)
+  -- Must produce a JSON string with keys: shape, columns, dtypes.
+  -- filter_tree is a FilterNode (or nil). If provided, row_count in shape
+  -- should reflect the filtered subset. Ignore filter_tree to return unfiltered counts.
   return "..."
 end
 
-function MyProvider:rows_expr(var_name, offset, limit)
+function MyProvider:rows_expr(var_name, offset, limit, sort, filter_tree)
   -- Must produce a JSON array of arrays: [[row0col0, row0col1, ...], ...]
+  -- sort is a SortEntry[] (or nil); filter_tree is a FilterNode (or nil).
+  -- Apply them before slicing [offset:offset+limit] for correct paging.
   return "..."
 end
 
@@ -100,9 +104,10 @@ function PythonPolars:metadata_expr(var_name)
   )
 end
 
-function PythonPolars:rows_expr(var_name, offset, limit)
+function PythonPolars:rows_expr(var_name, offset, limit, sort, filter_tree)
   -- Polars .to_dicts() returns a list of {col: val} dicts.
   -- We convert to a list of lists to match the shared protocol.
+  -- Sort and filter_tree are not applied in this minimal example.
   return string.format(
     "__import__('json').dumps("
       .. "[[row[c] for c in %s.columns] "
@@ -321,16 +326,22 @@ end
 
 ## Registering a custom provider via setup
 
-The `setup` function accepts `dap_provider` and `lang_providers` overrides directly:
+`lang_providers` can be overridden via `setup()`:
 
 ```lua
 require("dataframe-preview").setup({
-  dap_provider  = require("my.providers.vimspector").new(),
   lang_providers = {
     python = { require("my.providers.python_polars").new() },
   },
-  debug         = false,
+  debug = false,
 })
+```
+
+> **DAP provider:** `setup()` does not currently accept a `dap_provider` key — `NvimDap` is hardcoded in `init.lua`. To swap in a custom DAP provider, replace the `NvimDap.new()` call on line 22 of `lua/dataframe-preview/init.lua` with your own instance.
+
+```lua
+-- init.lua (line 22 area) — edit directly to use a custom DapProvider:
+local dap_provider = require("my.providers.my_dap").new()
 ```
 
 ---

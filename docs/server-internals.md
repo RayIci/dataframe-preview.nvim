@@ -147,13 +147,18 @@ Sessions are keyed by UUID and hold:
 
 ```lua
 ---@class Session
----@field var_name  string       -- "df_users"
----@field frame_id  integer      -- DAP stack frame ID
----@field metadata  Metadata     -- row_count, col_count, columns, dtypes
----@field ws_client uv_tcp_t     -- attached after WebSocket init message
+---@field var_name      string           -- "df_users"
+---@field frame_id      integer          -- DAP stack frame ID
+---@field metadata      Metadata|nil     -- row_count, col_count, columns, dtypes
+---@field ws_client     uv_tcp_t|nil     -- attached after WebSocket init message
+---@field lang_provider LanguageProvider -- provider resolved at preview time
+---@field sort          SortEntry[]      -- active multi-column sort (default: {})
+---@field filter_tree   FilterNode       -- active recursive filter tree (default: empty root group)
 ```
 
 The `ws_client` is `nil` until the browser connects and sends `{ type:"init" }`. At that point `handlers.on_init` calls `session_store.attach_client(uuid, client)`.
+
+`lang_provider` is stored at session-creation time so that both the initial metadata fetch and all subsequent row fetches use the same provider without re-running the `can_handle_expr` check.
 
 Sessions are never automatically garbage-collected during a Neovim session (they accumulate, one per `:PreviewDataFrame` call). This is intentional — it allows a closed browser tab to reconnect if the user reopens the URL. Sessions are cleared entirely when the server stops (`VimLeavePre`).
 
@@ -172,12 +177,23 @@ Sessions are never automatically garbage-collected during a Neovim session (they
 ### `on_fetch_rows(uuid, offset, limit, client, dap_provider, lang_provider)`
 
 1. Gets `session.var_name` and `session.frame_id` from the store.
-2. Calls `lang_provider:rows_expr(var_name, offset, limit)` to build the expression.
+2. Calls `lang_provider:rows_expr(var_name, offset, limit, session.sort, session.filter_tree)` to build the expression.
 3. Calls `dap_provider:evaluate(expr, frame_id, cb)` — this is async.
 4. In the callback, calls `lang_provider:parse_rows(result)`.
 5. Sends `{ type:"rows", offset, data:[[...]] }`.
 
-Both handlers send `{ type:"error", message }` on any failure so the UI can display it.
+### `on_apply_sort_filter(uuid, sort, filter_tree, client, dap_provider)`
+
+1. Looks up the session by UUID.
+2. Updates `session.sort` and `session.filter_tree` with the values sent by the browser.
+3. Calls `lang_provider:metadata_expr(var_name, filter_tree)` to build a new metadata expression that reflects the active filter.
+4. Calls `dap_provider:evaluate(expr, frame_id, cb)` — this is async.
+5. In the callback, calls `lang_provider:parse_metadata(result)` and stores the result in `session.metadata`.
+6. Sends an updated `{ type:"meta", row_count, col_count, columns, dtypes }` so the frontend can resize the virtual scroller to the filtered row count.
+
+After this response the frontend will re-issue `fetch_rows` requests; those calls read `session.sort` and `session.filter_tree` automatically, so the returned rows already reflect the active sort/filter.
+
+All three handlers send `{ type:"error", message }` on any failure so the UI can display it.
 
 ---
 

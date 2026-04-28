@@ -174,7 +174,8 @@ function PythonPandas:rows_expr(var_name, offset, limit, sort, filter_tree)
   local slice =
     string.format("%s.iloc[%d:%d]", apply_sort(apply_filter_tree(var_name, filter_tree), sort), offset, offset + limit)
   return string.format(
-    "__import__('json').dumps(%s.pipe(lambda _s: _s.astype(object).where(_s.notna(), None)).values.tolist(), default=str)",
+    "__import__('json').dumps(%s.pipe(lambda _s: _s.astype(object).where(_s.notna(), None)).values.tolist(), "
+      .. "default=str)",
     slice
   )
 end

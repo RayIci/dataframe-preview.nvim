@@ -68,6 +68,27 @@ function M.attach_client(uuid, ws_client)
   end
 end
 
+-- Returns a compact summary array for all fully-initialized sessions.
+-- Only sessions with metadata are included (guards against nil-field JSON errors
+-- for sessions that are still being set up by the orchestrator).
+---@return {uuid:string, var_name:string, row_count:integer, col_count:integer, columns:string[], dtypes:string[]}[]
+function M.list_summary()
+  local out = {}
+  for uuid, session in pairs(_store) do
+    if session.metadata then
+      out[#out + 1] = {
+        uuid = uuid,
+        var_name = session.var_name,
+        row_count = session.metadata.row_count,
+        col_count = session.metadata.col_count,
+        columns = session.metadata.columns,
+        dtypes = session.metadata.dtypes,
+      }
+    end
+  end
+  return out
+end
+
 -- Delete a session (e.g. when the browser tab closes).
 ---@param uuid string
 function M.remove(uuid)

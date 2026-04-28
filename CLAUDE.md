@@ -10,7 +10,7 @@ make format          # format Lua with StyLua  (cargo install stylua)
 make format-check    # check formatting without modifying (used in CI/pre-commit)
 make lint            # luacheck              (luarocks install luacheck)
 make test            # run plenary/busted test suite (requires plenary.nvim in lazy)
-make build-ui        # install npm deps + build frontend → ui/dist/index.html
+make build-ui        # install bun deps + build frontend → ui/dist/index.html
 make ui-dev          # Vite dev server with hot reload
 make ui-typecheck    # TypeScript type check only
 make ci              # format-check + lint + test + ui-typecheck
@@ -26,7 +26,7 @@ nvim --headless -u tests/minimal_init.lua \
 StyLua config (stylua.toml): 120-column width, 2-space indent, double quotes.  
 Luacheck globals: `vim`, `bit`; `--no-unused-args` is always passed.
 
-The pre-built frontend bundle (`ui/dist/index.html`) is committed to the repo — users don't need Node.js at runtime. Rebuild it with `make build-ui` after any UI changes.
+The pre-built frontend bundle (`ui/dist/index.html`) is committed to the repo — users don't need Node.js or bun at runtime. Rebuild it with `make build-ui` after any UI changes. The frontend uses bun as the package manager (`bun.lockb` is committed; `package-lock.json` was removed).
 
 ## Architecture
 
@@ -79,15 +79,22 @@ Use `utils/classes.lua` for object construction: `return classes.new(MyProvider)
 ### WebSocket protocol
 
 ```
-Browser → { type:"init",       session: uuid }
-Lua    ← { type:"meta",       columns, dtypes, row_count }
-Browser → { type:"fetch_rows", offset, limit }
-Lua    ← { type:"rows",       offset, data: [[...]] }
+Browser → { type:"list_sessions" }
+Lua    ← { type:"sessions_list",    sessions:[{uuid,var_name,...}] }
+Lua    → { type:"session_created",  uuid, var_name, ... }   (broadcast on new session)
+Browser → { type:"init",            session: uuid }
+Lua    ← { type:"meta",            session, columns, dtypes, row_count }
+Browser → { type:"fetch_rows",      session, offset, limit }
+Lua    ← { type:"rows",            session, offset, data: [[...]] }
+Browser → { type:"apply_sort_filter", session, sort, filter_tree }
+Lua    ← { type:"meta",            session, row_count (filtered) }
 ```
+
+All server responses include `session` (uuid) so the multi-session frontend can route them to the correct tab.
 
 ### Frontend stack
 
-React 19 + shadcn/ui + TanStack Virtual (virtual scrolling) + Zustand (state). Built with Vite into a single `ui/dist/index.html` via `vite-plugin-singlefile`. Source in `ui/src/`.
+React 19 + shadcn/ui (Luma/mist theme, light + dark) + TanStack Virtual (virtual scrolling) + Zustand (two stores: `sessionStore` for tabs, `dataStore` for per-session data). Built with Vite + bun into a single `ui/dist/index.html` via `vite-plugin-singlefile`. Source in `ui/src/`.
 
 ## Tests
 

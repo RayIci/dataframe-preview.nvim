@@ -15,7 +15,9 @@ local classes = require("dataframe-preview.utils.classes")
 ---@field logic    string|nil          -- group only: "AND" | "OR"
 ---@field children FilterNode[]|nil    -- group only: nested nodes
 ---@field column   string|nil          -- condition only
----@field operator string|nil          -- condition only: "contains"|"not_contains"|"equals"|"not_equals"|"starts_with"|"ends_with"|"gt"|"gte"|"lt"|"lte"
+---@field operator string|nil          -- condition only: "contains"|"not_contains"|"equals"|
+---                                                       "not_equals"|"starts_with"|"ends_with"|
+---                                                       "gt"|"gte"|"lt"|"lte"
 ---@field value    string|nil          -- condition only
 
 ---@class LanguageProvider

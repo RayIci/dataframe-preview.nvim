@@ -1,9 +1,8 @@
-import { useRef, useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Filter } from "lucide-react";
 import {
   useDataStore, SortEntry, FilterGroup,
-  hasActiveFilter, countConditions, hasConditionForCol, emptyFilterTree,
+  hasConditionForCol,
 } from "@/store/dataStore";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -13,31 +12,40 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { LoadingSkeleton } from "./LoadingSkeleton";
-import { FilterPanel } from "./FilterPanel";
+import { ScrollToTop } from "./ScrollToTop";
+import { useColumnResize } from "@/hooks/useColumnResize";
+import { cn } from "@/lib/utils";
 
 const ROW_HEIGHT   = 32;
 const CHUNK_SIZE   = 100;
 const PREFETCH_GAP = 20;
+const HEADER_HEIGHT = 48; // px — room for 2-line column headers
 
 function dtypeBadge(dtype: string): { label: string; variant: "default" | "secondary" | "outline" } {
-  if (dtype.startsWith("int") || dtype.startsWith("uint") || dtype.startsWith("float"))
-    return { label: dtype, variant: "default" };
-  if (dtype.startsWith("datetime") || dtype.startsWith("timedelta"))
-    return { label: dtype, variant: "secondary" };
+  if (/^(int|uint|float)/.test(dtype))     return { label: dtype, variant: "default" };
+  if (/^(datetime|timedelta)/.test(dtype)) return { label: dtype, variant: "secondary" };
   return { label: dtype, variant: "outline" };
 }
 
 interface DataGridProps {
-  fetchRows:       (offset: number) => void;
-  applySortFilter: (sort: SortEntry[], filterTree: FilterGroup) => void;
+  uuid:            string;
+  fetchRows:       (uuid: string, offset: number) => void;
+  applySortFilter: (uuid: string, sort: SortEntry[], filterTree: FilterGroup) => void;
 }
 
-export function DataGrid({ fetchRows, applySortFilter }: DataGridProps) {
-  const { meta, loading, error, getRow, hasRows, sort, filterTree, scrollVersion } = useDataStore();
+export function DataGrid({ uuid, fetchRows, applySortFilter }: DataGridProps) {
+  const data    = useDataStore((s) => s.getData(uuid));
+  const getRow  = useDataStore((s) => s.getRow);
+  const hasRows = useDataStore((s) => s.hasRows);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { getWidth, startResize } = useColumnResize();
 
-  const [filterPanelOpen,  setFilterPanelOpen]  = useState(false);
-  const [filterInitialCol, setFilterInitialCol] = useState<string | null>(null);
+  const meta          = data?.meta          ?? null;
+  const loading       = data?.loading       ?? true;
+  const error         = data?.error         ?? null;
+  const sort          = data?.sort          ?? [];
+  const filterTree    = data?.filterTree;
+  const scrollVersion = data?.scrollVersion ?? 0;
 
   const rowCount = meta?.row_count ?? 0;
 
@@ -50,226 +58,208 @@ export function DataGrid({ fetchRows, applySortFilter }: DataGridProps) {
 
   const items = virtualizer.getVirtualItems();
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0 });
-  }, [scrollVersion]);
+  useEffect(() => { scrollRef.current?.scrollTo({ top: 0 }); }, [scrollVersion]);
+  useEffect(() => { scrollRef.current?.scrollTo({ top: 0 }); }, [uuid]);
 
   const prefetch = useCallback(() => {
     if (!items.length) return;
-    const lastIndex = items[items.length - 1].index;
-    const nextChunkOffset = Math.floor((lastIndex + PREFETCH_GAP) / CHUNK_SIZE) * CHUNK_SIZE;
-    if (nextChunkOffset < rowCount && !hasRows(nextChunkOffset)) {
-      fetchRows(nextChunkOffset);
-    }
-  }, [items, rowCount, hasRows, fetchRows]);
+    const lastIndex  = items[items.length - 1].index;
+    const nextOffset = Math.floor((lastIndex + PREFETCH_GAP) / CHUNK_SIZE) * CHUNK_SIZE;
+    if (nextOffset < rowCount && !hasRows(uuid, nextOffset)) fetchRows(uuid, nextOffset);
+  }, [items, rowCount, hasRows, uuid, fetchRows]);
 
   useEffect(() => { prefetch(); }, [prefetch]);
 
-  // Click on a column header always adds/cycles that column in the sort list.
-  // Cycles: off → asc → desc → off, without touching other columns.
-  const handleSortClick = useCallback((col: string) => {
-    const existing = sort.find((s) => s.column === col);
-    let newSort: SortEntry[];
-    if (!existing)
-      newSort = [...sort, { column: col, ascending: true }];
-    else if (existing.ascending)
-      newSort = sort.map((s) => s.column === col ? { ...s, ascending: false } : s);
-    else
-      newSort = sort.filter((s) => s.column !== col);
-    applySortFilter(newSort, filterTree);
-  }, [sort, filterTree, applySortFilter]);
-
-  const clearAllSort = () => applySortFilter([], filterTree);
+  const handleSortClick = useCallback(
+    (col: string) => {
+      if (!filterTree) return;
+      const existing = sort.find((s) => s.column === col);
+      let newSort: SortEntry[];
+      if (!existing)
+        newSort = [...sort, { column: col, ascending: true }];
+      else if (existing.ascending)
+        newSort = sort.map((s) => s.column === col ? { ...s, ascending: false } : s);
+      else
+        newSort = sort.filter((s) => s.column !== col);
+      applySortFilter(uuid, newSort, filterTree);
+    },
+    [sort, filterTree, uuid, applySortFilter]
+  );
 
   if (error) {
     return (
-      <div className="flex flex-1 items-center justify-center text-destructive text-sm">
+      <div className="flex flex-1 items-center justify-center text-destructive text-sm px-4 text-center">
         {error}
       </div>
     );
   }
 
-  if (loading || !meta) {
-    return <LoadingSkeleton cols={5} />;
-  }
+  if (loading || !meta) return <LoadingSkeleton cols={5} />;
 
   const colCount = meta.columns.length;
-  const colWidth = `${Math.max(120, Math.floor(100 / colCount))}px`;
-  const filterActive = hasActiveFilter(filterTree);
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex flex-col flex-1 overflow-hidden">
-        {/* Sticky column headers */}
+      <div className="flex flex-col flex-1 overflow-hidden relative">
+
+        {/* ── Column headers ────────────────────────────────────────────── */}
         <div
-          className="flex shrink-0 border-b border-border bg-card text-xs font-medium text-muted-foreground"
-          style={{ minWidth: `${colCount * 120}px` }}
+          className="flex shrink-0 border-b-2 border-border bg-card"
+          style={{ height: HEADER_HEIGHT }}
         >
-          <div className="w-14 shrink-0 px-2 py-2 text-right border-r border-border">#</div>
+          {/* Row-index column */}
+          <div
+            className="w-14 shrink-0 flex items-center justify-end px-2 border-r border-border text-[10px] text-muted-foreground/50 select-none"
+          >
+            #
+          </div>
+
           {meta.columns.map((col, i) => {
             const { label, variant } = dtypeBadge(meta.dtypes[i] ?? "");
             const sortEntry  = sort.find((s) => s.column === col);
-            const sortIdx    = sortEntry ? sort.indexOf(sortEntry) : -1;
-            const isFiltered = hasConditionForCol(filterTree, col);
+            const sortRank   = sortEntry ? sort.indexOf(sortEntry) : -1;
+            const isFiltered = filterTree ? hasConditionForCol(filterTree, col) : false;
+            const colW       = getWidth(col);
 
             return (
               <div
                 key={i}
-                className="relative flex items-center gap-1 px-2 py-2 border-r border-border last:border-r-0 overflow-visible select-none"
-                style={{ width: colWidth, minWidth: colWidth }}
+                className="group relative flex items-stretch border-r border-border last:border-r-0 select-none"
+                style={{ width: colW, minWidth: colW, maxWidth: colW }}
               >
-                {/* Sortable area */}
+                {/* ── Sort button — vertical layout ── */}
                 <button
-                  className="flex items-center gap-1 flex-1 min-w-0 cursor-pointer hover:text-foreground text-left"
+                  className="flex flex-col justify-center flex-1 min-w-0 px-2 py-1.5 cursor-pointer hover:bg-muted/50 text-left gap-1 transition-colors"
                   onClick={() => handleSortClick(col)}
-                  title="Click to sort · click again to reverse · click again to remove"
+                  title="Click to sort · again to reverse · again to remove"
                 >
-                  {sortEntry && (
-                    <span className="shrink-0 text-blue-400 text-[10px] font-bold leading-none">
-                      {sortEntry.ascending ? "↑" : "↓"}
-                      {sort.length > 1 ? sortIdx + 1 : ""}
+                  {/* Row 1: sort indicator + filter dot + column name */}
+                  <div className="flex items-center gap-1 min-w-0">
+                    {sortEntry && (
+                      <span className="shrink-0 text-primary font-bold text-[11px] leading-none">
+                        {sortEntry.ascending ? "↑" : "↓"}
+                        {sort.length > 1 && (
+                          <span className="text-[9px]">{sortRank + 1}</span>
+                        )}
+                      </span>
+                    )}
+                    {isFiltered && (
+                      <span
+                        className="shrink-0 size-1.5 rounded-full bg-amber-400"
+                        title="Filtered"
+                      />
+                    )}
+                    <span
+                      className={cn(
+                        "truncate text-[11px] font-semibold leading-tight",
+                        sortEntry ? "text-primary" : "text-foreground"
+                      )}
+                    >
+                      {col}
                     </span>
-                  )}
-                  <span className="truncate text-foreground">{col}</span>
-                  <Badge variant={variant} className="shrink-0">{label}</Badge>
+                  </div>
+
+                  {/* Row 2: dtype badge */}
+                  <Badge
+                    variant={variant}
+                    className="w-fit shrink-0 text-[9px] px-1.5 py-0 h-4 font-normal rounded-sm"
+                  >
+                    {label}
+                  </Badge>
                 </button>
 
-                {/* Filter toggle */}
-                <button
-                  className={`shrink-0 rounded p-0.5 hover:bg-muted transition-colors ${
-                    isFiltered ? "text-amber-400" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                  onClick={() => { setFilterInitialCol(col); setFilterPanelOpen(true); }}
-                  title="Open filter builder"
+                {/* ── Resize handle ──────────────────────────────────────── */}
+                {/* Visible 2px bar at the far right edge, always present   */}
+                <div
+                  className="absolute right-0 top-0 h-full w-2.5 cursor-col-resize z-10"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    startResize(col, e.clientX);
+                  }}
                 >
-                  <Filter size={11} />
-                </button>
+                  {/* The visual indicator: a centered pill */}
+                  <div
+                    className="absolute right-0 top-1/4 h-1/2 w-0.5 rounded-full bg-border group-hover:bg-primary group-hover:w-1 transition-all duration-150"
+                  />
+                </div>
               </div>
             );
           })}
         </div>
 
-        {/* Active sort / filter chips */}
-        {(sort.length > 0 || filterActive) && (
-          <div
-            className="flex flex-wrap items-center gap-1 px-2 py-1 border-b border-border bg-card/80 text-xs shrink-0"
-            style={{ minWidth: `${colCount * 120}px` }}
-          >
-            {sort.length > 0 && (
-              <>
-                <span className="text-muted-foreground">Sort:</span>
-                {sort.map((s, i) => (
-                  <span
-                    key={s.column}
-                    className="inline-flex items-center gap-0.5 rounded bg-blue-950 px-1.5 py-0.5 text-blue-300"
-                  >
-                    {s.ascending ? "↑" : "↓"} {s.column}
-                    <button
-                      className="ml-0.5 hover:text-white"
-                      onClick={() => applySortFilter(sort.filter((_, j) => j !== i), filterTree)}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-                <button className="text-muted-foreground hover:text-foreground" onClick={clearAllSort}>
-                  clear
-                </button>
-                {filterActive && <span className="mx-1 text-border">|</span>}
-              </>
-            )}
-            {filterActive && (
-              <>
-                <span className="text-muted-foreground">Filter:</span>
-                <span className="text-amber-300">
-                  {countConditions(filterTree)} condition{countConditions(filterTree) !== 1 ? "s" : ""}
-                </span>
-                <button
-                  className="text-amber-400 hover:text-amber-200 underline"
-                  onClick={() => { setFilterInitialCol(null); setFilterPanelOpen(true); }}
-                >
-                  edit
-                </button>
-                <button
-                  className="text-muted-foreground hover:text-foreground"
-                  onClick={() => applySortFilter(sort, emptyFilterTree())}
-                >
-                  clear
-                </button>
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Recursive filter builder panel (fixed overlay) */}
-        {filterPanelOpen && meta && (
-          <FilterPanel
-            columns={meta.columns}
-            dtypes={meta.dtypes}
-            filterTree={filterTree}
-            initialCol={filterInitialCol ?? undefined}
-            onApply={(tree) => { applySortFilter(sort, tree); setFilterPanelOpen(false); }}
-            onClose={() => setFilterPanelOpen(false)}
-          />
-        )}
-
-        {/* Virtual scroll body */}
+        {/* ── Virtual scroll body ───────────────────────────────────────── */}
         <div ref={scrollRef} className="flex-1 overflow-auto">
           <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
             {items.map((vRow) => {
-              const row = getRow(vRow.index);
+              const row = getRow(uuid, vRow.index);
               return (
                 <div
                   key={vRow.key}
                   data-index={vRow.index}
                   ref={virtualizer.measureElement}
-                  className="absolute flex w-full border-b border-border/50 text-xs hover:bg-muted/30"
-                  style={{ top: vRow.start, minWidth: `${colCount * 120}px` }}
+                  className="absolute flex w-full border-b border-border/40 hover:bg-muted/20 transition-colors"
+                  style={{ top: vRow.start }}
                 >
-                  <div className="w-14 shrink-0 px-2 py-1.5 text-right text-muted-foreground border-r border-border/50">
+                  {/* Row index */}
+                  <div className="w-14 shrink-0 px-2 py-1.5 text-right text-muted-foreground/40 border-r border-border/40 tabular-nums text-[11px]">
                     {vRow.index}
                   </div>
+
+                  {/* Data cells */}
                   {row ? (
                     row.map((cell, ci) => {
+                      const colW    = getWidth(meta.columns[ci] ?? "");
                       const display = cell === null ? "null" : String(cell);
+                      const isNull  = cell === null;
                       return (
                         <Tooltip key={ci}>
                           <TooltipTrigger asChild>
                             <div
-                              className="px-2 py-1.5 border-r border-border/50 last:border-r-0 overflow-hidden cursor-default"
-                              style={{ width: colWidth, minWidth: colWidth }}
+                              data-cell
+                              className="px-2 py-1.5 border-r border-border/40 last:border-r-0 overflow-hidden cursor-default"
+                              style={{ width: colW, minWidth: colW, maxWidth: colW }}
                             >
                               <span
-                                className={`block truncate ${cell === null ? "text-muted-foreground italic" : ""}`}
+                                className={cn(
+                                  "block truncate",
+                                  isNull && "text-muted-foreground/40 italic"
+                                )}
                               >
                                 {display}
                               </span>
                             </div>
                           </TooltipTrigger>
-                          {display.length > 20 && (
-                            <TooltipContent>
-                              <span className="break-all">{display}</span>
+                          {display.length > 25 && (
+                            <TooltipContent side="bottom" className="max-w-xs">
+                              <span className="break-all font-mono text-xs">{display}</span>
                             </TooltipContent>
                           )}
                         </Tooltip>
                       );
                     })
                   ) : (
-                    Array.from({ length: colCount }).map((_, ci) => (
-                      <div
-                        key={ci}
-                        className="px-2 py-1.5 border-r border-border/50 last:border-r-0"
-                        style={{ width: colWidth, minWidth: colWidth }}
-                      >
-                        <div className="h-3 w-3/4 rounded bg-muted/40 animate-pulse" />
-                      </div>
-                    ))
+                    Array.from({ length: colCount }).map((_, ci) => {
+                      const colW = getWidth(meta.columns[ci] ?? "");
+                      return (
+                        <div
+                          key={ci}
+                          data-cell
+                          className="px-2 py-1.5 border-r border-border/40 last:border-r-0"
+                          style={{ width: colW, minWidth: colW, maxWidth: colW }}
+                        >
+                          <div className="h-3 w-3/4 rounded bg-muted/40 animate-pulse" />
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               );
             })}
           </div>
         </div>
+
+        <ScrollToTop scrollRef={scrollRef} />
       </div>
     </TooltipProvider>
   );

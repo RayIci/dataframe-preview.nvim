@@ -66,9 +66,11 @@ function M.on_init(uuid, client)
   local meta = session.metadata
 
   -- Reply with everything the frontend needs to set up the table columns
-  -- and know how many rows to expect.
+  -- and know how many rows to expect.  `session` (the uuid) is included so
+  -- the multi-session frontend can route this response to the right tab.
   client:write(ws.encode_json({
     type = "meta",
+    session = uuid,
     var_name = session.var_name,
     row_count = meta.row_count,
     col_count = meta.col_count,
@@ -131,11 +133,11 @@ function M.on_fetch_rows(uuid, offset, limit, client, dap_provider)
       return
     end
 
-    -- Send the rows to the browser.
-    -- `offset` is included so the frontend knows where in the full dataset
-    -- to place this chunk (it may have multiple requests in flight).
+    -- Send the rows to the browser.  `session` (the uuid) is included so the
+    -- multi-session frontend can route this chunk to the right tab.
     client:write(ws.encode_json({
       type = "rows",
+      session = uuid,
       offset = offset,
       data = rows,
     }))
@@ -178,6 +180,7 @@ function M.on_apply_sort_filter(uuid, sort, filter_tree, client, dap_provider)
 
     client:write(ws.encode_json({
       type = "meta",
+      session = uuid,
       var_name = session.var_name,
       row_count = metadata.row_count,
       col_count = metadata.col_count,
@@ -185,6 +188,20 @@ function M.on_apply_sort_filter(uuid, sort, filter_tree, client, dap_provider)
       dtypes = metadata.dtypes,
     }))
   end)
+end
+
+-- ---------------------------------------------------------------------------
+-- M.on_list_sessions(client)
+--
+-- Responds with a summary of all fully-initialized sessions.  Called when the
+-- browser first connects and needs to populate its session navbar without
+-- having opened with a specific session UUID in the URL.
+-- ---------------------------------------------------------------------------
+function M.on_list_sessions(client)
+  client:write(ws.encode_json({
+    type = "sessions_list",
+    sessions = session_store.list_summary(),
+  }))
 end
 
 -- ---------------------------------------------------------------------------
@@ -210,6 +227,8 @@ function M.dispatch(payload, client, dap_provider)
     M.on_fetch_rows(msg.session, msg.offset or 0, msg.limit or 100, client, dap_provider)
   elseif msg_type == "apply_sort_filter" then
     M.on_apply_sort_filter(msg.session, msg.sort or {}, msg.filter_tree, client, dap_provider)
+  elseif msg_type == "list_sessions" then
+    M.on_list_sessions(client)
   else
     log.warn("handlers: unknown message type: " .. tostring(msg_type))
   end

@@ -162,6 +162,13 @@ Browser                          Lua server
   │── { type:"fetch_rows",        │
   │    offset:100, limit:100 } ──▶│  evaluate rows_expr via DAP
   │◀─ { type:"rows", ... } ────── │
+  │                                │
+  │  (user applies sort/filter)    │
+  │── { type:"apply_sort_filter", │
+  │    sort:[{column,ascending}], │
+  │    filter_tree:{…} } ────────▶│  update session; re-eval metadata_expr
+  │◀─ { type:"meta",              │  new row_count reflects active filter
+  │    row_count (filtered) } ─── │
 ```
 
 Each `fetch_rows` triggers a fresh DAP `evaluate` call. The rows expression:

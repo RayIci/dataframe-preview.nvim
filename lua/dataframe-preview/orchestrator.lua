@@ -183,14 +183,33 @@ function M.preview(dap_provider, lang_providers)
           filter_tree = { type = "group", logic = "AND", children = {} },
         })
 
-        -- ── Step 6 & 7: start server and open browser ─────────────────────
+        -- ── Step 6 & 7: start server, broadcast, and open browser ────────────
         -- ensure_started is idempotent — it only actually starts the server
         -- on the first call.  The callback fires with the port number once
         -- the server is ready (immediately if it was already running).
         server.ensure_started(dap_provider, function(port)
-          local url = string.format("http://127.0.0.1:%d/?session=%s", port, uuid)
-          log.info("dataframe-preview: opening " .. var_name .. " (" .. metadata.row_count .. " rows)")
-          browser.open(url)
+          -- Broadcast the new session to any already-open browser tabs.
+          -- If no clients are connected this is a no-op.
+          server.broadcast({
+            type = "session_created",
+            uuid = uuid,
+            var_name = var_name,
+            row_count = metadata.row_count,
+            col_count = metadata.col_count,
+            columns = metadata.columns,
+            dtypes = metadata.dtypes,
+          })
+
+          -- Only open a new browser window if no tab is currently connected.
+          -- If the browser is already open it will receive the session_created
+          -- broadcast above and add the new tab to its navbar automatically.
+          if not server.has_connected_clients() then
+            local url = string.format("http://127.0.0.1:%d", port)
+            log.info("dataframe-preview: opening browser (" .. var_name .. ", " .. metadata.row_count .. " rows)")
+            browser.open(url)
+          else
+            log.info("dataframe-preview: session broadcast (" .. var_name .. ")")
+          end
         end)
       end)
     end)

@@ -35,6 +35,7 @@ Place your cursor on any Pandas DataFrame variable, trigger `:PreviewDataFrame`,
 - **Instant load** — the browser UI renders only the visible rows using virtual scrolling. A 10M-row DataFrame opens in the same time as a 10-row one.
 - **On-demand chunking** — rows are fetched in chunks of 100 as you scroll. The Lua backend streams them over WebSocket.
 - **Async by design** — the local HTTP/WebSocket server runs on `vim.uv` (libuv). Neovim never blocks.
+- **Sort and filter** — multi-column sort and recursive AND/OR filter trees applied server-side via DAP; only matching rows are ever fetched.
 - **Extensible** — clean `DapProvider` and `LanguageProvider` interfaces make it straightforward to support additional debuggers and languages beyond the defaults.
 - **Self-contained** — the pre-built frontend bundle is committed to the repo. Users need only Neovim + a DAP adapter. No Node.js required at runtime.
 
@@ -141,12 +142,14 @@ Orchestrator
 
 Browser tab
   └─ WebSocket ws://127.0.0.1:{PORT}/ws
-       ├─ → { type:"init",      session }
-       ├─ ← { type:"meta",      columns, dtypes, row_count }
-       ├─ → { type:"fetch_rows", offset:0,   limit:100 }
-       ├─ ← { type:"rows",      data:[[...]] }
-       ├─ → { type:"fetch_rows", offset:100, limit:100 }  ← scroll trigger
-       └─ ← { type:"rows",      data:[[...]] }
+       ├─ → { type:"init",             session }
+       ├─ ← { type:"meta",             columns, dtypes, row_count }
+       ├─ → { type:"fetch_rows",       offset:0,   limit:100 }
+       ├─ ← { type:"rows",             data:[[...]] }
+       ├─ → { type:"fetch_rows",       offset:100, limit:100 }  ← scroll trigger
+       ├─ ← { type:"rows",             data:[[...]] }
+       ├─ → { type:"apply_sort_filter", sort:[…], filter_tree:{…} }  ← user sorts/filters
+       └─ ← { type:"meta",             row_count (filtered) }
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the full breakdown.
@@ -165,12 +168,14 @@ local classes = require("dataframe-preview.utils.classes")
 
 local MyProvider = setmetatable({}, { __index = LanguageProvider })
 
-function MyProvider:metadata_expr(var_name)
+function MyProvider:metadata_expr(var_name, filter_tree)
   -- Must return JSON: { shape:[rows,cols], columns:[...], dtypes:[...] }
+  -- filter_tree is a FilterNode (or nil); row_count should reflect filtered rows.
   return string.format("my_metadata_fn(%s)", var_name)
 end
 
-function MyProvider:rows_expr(var_name, offset, limit)
+function MyProvider:rows_expr(var_name, offset, limit, sort, filter_tree)
+  -- sort is a SortEntry[] (or nil); filter_tree is a FilterNode (or nil).
   return string.format("my_rows_fn(%s, %d, %d)", var_name, offset, limit)
 end
 
@@ -210,6 +215,8 @@ See [`docs/extending.md`](docs/extending.md) for complete Polars and C++ example
 
 ### Adding a DAP client
 
+> **Note:** The DAP provider is not yet configurable via `setup()` — `NvimDap` is wired in `init.lua` directly. To use a custom provider, implement the `DapProvider` interface and replace the `NvimDap.new()` call in `init.lua` with your own instance.
+
 ```lua
 local DapProvider = require("dataframe-preview.dap.provider")
 local MyDap = setmetatable({}, { __index = DapProvider })
@@ -217,8 +224,6 @@ local MyDap = setmetatable({}, { __index = DapProvider })
 function MyDap:is_available() return true end
 function MyDap:get_frame_id(callback) ... end
 function MyDap:evaluate(expr, frame_id, callback) ... end
-
-require("dataframe-preview").setup({ dap_provider = MyDap.new() })
 ```
 
 See [`docs/extending.md`](docs/extending.md) for the full interface contract and a worked example.
