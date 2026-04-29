@@ -46,35 +46,141 @@ end
 -- Wraps s as a Python single-quoted string literal, escaping backslashes and
 -- single quotes so the result is safe to embed in a generated Python expression.
 local function py_str(s)
+  if type(s) ~= "string" then return "''" end
   return "'" .. s:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'"
+end
+
+-- vim.json.decode maps JSON null to vim.NIL (userdata), not Lua nil.
+-- This helper converts a potentially-NIL timezone field to a plain string or nil.
+local function node_tz(v)
+  return (type(v) == "string" and v ~= "") and v or nil
+end
+
+-- Returns the column Series adjusted for timezone so it can be compared
+-- against a pd.Timestamp built with flt_tz.
+local function dt_col_expr(var_name, col, col_tz, flt_tz)
+  if col_tz and flt_tz then
+    if col_tz ~= flt_tz then
+      -- both tz-aware but different zones: convert column to the filter tz
+      return string.format("%s[%s].dt.tz_convert(%s)", var_name, col, py_str(flt_tz))
+    else
+      -- same tz: use directly
+      return string.format("%s[%s]", var_name, col)
+    end
+  elseif col_tz and not flt_tz then
+    -- column is tz-aware, user wants naive comparison: strip tz
+    return string.format("%s[%s].dt.tz_convert(None)", var_name, col)
+  elseif not col_tz and flt_tz then
+    -- column is tz-naive, user picked a tz: localize so comparison is valid
+    return string.format("%s[%s].dt.tz_localize(%s)", var_name, col, py_str(flt_tz))
+  else
+    -- both naive
+    return string.format("%s[%s]", var_name, col)
+  end
+end
+
+-- Returns a pd.Timestamp expression for the filter value, with optional tz.
+local function dt_ts_expr(val, flt_tz)
+  if flt_tz then
+    return string.format("__import__('pandas').Timestamp(%s, tz=%s)", val, py_str(flt_tz))
+  else
+    return string.format("__import__('pandas').Timestamp(%s)", val)
+  end
 end
 
 -- Recursively converts a FilterNode tree into a Python boolean expression string.
 -- Returns nil for nodes that contribute no condition (e.g. empty groups).
 local function build_filter_node(var_name, node)
   if node.type == "condition" then
-    local col = py_str(node.column)
-    local val = py_str(node.value)
+    local col    = py_str(node.column)
+    local val    = py_str(node.value)
+    local cat    = node.dtype_category or "string"
+    local flt_tz = node_tz(node.filter_timezone)
+    local col_tz = node_tz(node.col_timezone)
+
+    -- Operators that need no value — check before the empty-value guard below.
+    if node.operator == "is_null" then
+      return string.format("(%s[%s].isna())", var_name, col)
+    elseif node.operator == "is_not_null" then
+      return string.format("(%s[%s].notna())", var_name, col)
+    end
+
+    -- All remaining operators require a non-empty value.  Skip the condition
+    -- silently rather than generating an expression that matches everything or
+    -- crashes the Python evaluator.
+    if type(node.value) ~= "string" or node.value == "" then
+      return nil
+    end
+
     if node.operator == "contains" then
       return string.format("(%s[%s].astype(str).str.contains(%s, case=False, na=False))", var_name, col, val)
     elseif node.operator == "not_contains" then
       return string.format("(~%s[%s].astype(str).str.contains(%s, case=False, na=False))", var_name, col, val)
-    elseif node.operator == "equals" then
-      return string.format("(%s[%s].astype(str) == %s)", var_name, col, val)
-    elseif node.operator == "not_equals" then
-      return string.format("(%s[%s].astype(str) != %s)", var_name, col, val)
     elseif node.operator == "starts_with" then
       return string.format("(%s[%s].astype(str).str.startswith(%s, na=False))", var_name, col, val)
     elseif node.operator == "ends_with" then
       return string.format("(%s[%s].astype(str).str.endswith(%s, na=False))", var_name, col, val)
+    elseif node.operator == "equals" then
+      if cat == "datetime" then
+        local dcol = dt_col_expr(var_name, col, col_tz, flt_tz)
+        local ts   = dt_ts_expr(val, flt_tz)
+        if #node.value <= 10 then
+          -- Date-only: floor to day so "2023-01-01" matches any time on that day.
+          return string.format("(%s.dt.floor('D') == %s)", dcol, ts)
+        else
+          return string.format("(%s == %s)", dcol, ts)
+        end
+      elseif cat == "numeric" then
+        return string.format("(%s[%s] == float(%s))", var_name, col, val)
+      else
+        return string.format("(%s[%s].astype(str) == %s)", var_name, col, val)
+      end
+    elseif node.operator == "not_equals" then
+      if cat == "datetime" then
+        local dcol = dt_col_expr(var_name, col, col_tz, flt_tz)
+        local ts   = dt_ts_expr(val, flt_tz)
+        if #node.value <= 10 then
+          return string.format("(%s.dt.floor('D') != %s)", dcol, ts)
+        else
+          return string.format("(%s != %s)", dcol, ts)
+        end
+      elseif cat == "numeric" then
+        return string.format("(%s[%s] != float(%s))", var_name, col, val)
+      else
+        return string.format("(%s[%s].astype(str) != %s)", var_name, col, val)
+      end
     elseif node.operator == "gt" then
-      return string.format("(%s[%s] > float(%s))", var_name, col, val)
+      if cat == "datetime" then
+        return string.format(
+          "(%s > %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz)
+        )
+      else
+        return string.format("(%s[%s] > float(%s))", var_name, col, val)
+      end
     elseif node.operator == "gte" then
-      return string.format("(%s[%s] >= float(%s))", var_name, col, val)
+      if cat == "datetime" then
+        return string.format(
+          "(%s >= %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz)
+        )
+      else
+        return string.format("(%s[%s] >= float(%s))", var_name, col, val)
+      end
     elseif node.operator == "lt" then
-      return string.format("(%s[%s] < float(%s))", var_name, col, val)
+      if cat == "datetime" then
+        return string.format(
+          "(%s < %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz)
+        )
+      else
+        return string.format("(%s[%s] < float(%s))", var_name, col, val)
+      end
     elseif node.operator == "lte" then
-      return string.format("(%s[%s] <= float(%s))", var_name, col, val)
+      if cat == "datetime" then
+        return string.format(
+          "(%s <= %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz)
+        )
+      else
+        return string.format("(%s[%s] <= float(%s))", var_name, col, val)
+      end
     end
   elseif node.type == "group" then
     if not node.children or #node.children == 0 then

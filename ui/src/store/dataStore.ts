@@ -16,11 +16,14 @@ export interface SortEntry {
 }
 
 export interface FilterCondition {
-  type:     "condition";
-  id:       string;
-  column:   string;
-  operator: string;
-  value:    string;
+  type:            "condition";
+  id:              string;
+  column:          string;
+  operator:        string;
+  value:           string;
+  dtype_category:  "numeric" | "datetime" | "string";
+  col_timezone:    string | null;  // timezone from dtype, e.g. "UTC"; null = tz-naive column
+  filter_timezone: string | null;  // user-selected comparison tz; null = compare naively
 }
 
 export interface FilterGroup {

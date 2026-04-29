@@ -117,8 +117,10 @@ export function useWebSocket() {
         useDataStore.getState().addRows(uuid, offset, msg.data as never);
 
       } else if (msg.type === "error") {
-        const uuid = (msg.session as string | undefined) ?? "";
-        useDataStore.getState().setError(uuid, msg.message as string);
+        const uuid = msg.session as string | undefined;
+        if (uuid) {
+          useDataStore.getState().setError(uuid, msg.message as string);
+        }
       }
     };
 

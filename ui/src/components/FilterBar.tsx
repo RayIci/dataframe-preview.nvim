@@ -27,33 +27,45 @@ import { cn } from "@/lib/utils";
 
 type OperatorDef = { value: string; label: string };
 
+const NULL_OPS: OperatorDef[] = [
+  { value: "is_null",     label: "is null" },
+  { value: "is_not_null", label: "is not null" },
+];
+
 const OPERATORS: Record<string, OperatorDef[]> = {
   numeric: [
-    { value: "equals", label: "=" },
+    { value: "equals",     label: "=" },
     { value: "not_equals", label: "≠" },
-    { value: "gt", label: ">" },
-    { value: "gte", label: "≥" },
-    { value: "lt", label: "<" },
-    { value: "lte", label: "≤" },
+    { value: "gt",         label: ">" },
+    { value: "gte",        label: "≥" },
+    { value: "lt",         label: "<" },
+    { value: "lte",        label: "≤" },
+    ...NULL_OPS,
   ],
   datetime: [
     { value: "equals", label: "=" },
-    { value: "gt", label: "after" },
-    { value: "gte", label: "on/after" },
-    { value: "lt", label: "before" },
-    { value: "lte", label: "on/before" },
+    { value: "gt",     label: "after" },
+    { value: "gte",    label: "on/after" },
+    { value: "lt",     label: "before" },
+    { value: "lte",    label: "on/before" },
+    ...NULL_OPS,
   ],
   string: [
-    { value: "contains", label: "contains" },
+    { value: "contains",     label: "contains" },
     { value: "not_contains", label: "doesn't contain" },
-    { value: "equals", label: "equals" },
-    { value: "not_equals", label: "not equals" },
-    { value: "starts_with", label: "starts with" },
-    { value: "ends_with", label: "ends with" },
+    { value: "equals",       label: "equals" },
+    { value: "not_equals",   label: "not equals" },
+    { value: "starts_with",  label: "starts with" },
+    { value: "ends_with",    label: "ends with" },
+    ...NULL_OPS,
   ],
 };
 
-function getDtypeCategory(dtype: string): keyof typeof OPERATORS {
+const NO_VALUE_OPS = new Set(["is_null", "is_not_null"]);
+
+type DtypeCategory = "numeric" | "datetime" | "string";
+
+function getDtypeCategory(dtype: string): DtypeCategory {
   if (/^(int|uint|float)/.test(dtype)) return "numeric";
   if (/^(datetime|timedelta)/.test(dtype)) return "datetime";
   return "string";
@@ -61,6 +73,53 @@ function getDtypeCategory(dtype: string): keyof typeof OPERATORS {
 
 function defaultOp(dtype: string): string {
   return OPERATORS[getDtypeCategory(dtype)][0].value;
+}
+
+// ── Datetime helpers ──────────────────────────────────────────────────────
+
+// Extract timezone from a pandas dtype string.
+// "datetime64[ns, UTC]" → "UTC"  |  "datetime64[ns]" → null
+function extractColTimezone(dtype: string): string | null {
+  const m = dtype.match(/\[[^\],]+,\s*([^\]]+)\]/);
+  return m ? m[1].trim() : null;
+}
+
+// Placeholder for datetime value inputs, reflecting the stored format.
+function datetimePlaceholder(dtype: string): string {
+  const tz = extractColTimezone(dtype);
+  return tz ? `YYYY-MM-DD HH:MM:SS (${tz})` : "YYYY-MM-DD HH:MM:SS";
+}
+
+// Accept YYYY-MM-DD or YYYY-MM-DD HH:MM[:SS[.f]] — no inline timezone offset.
+const DATETIME_RE = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2}(\.\d+)?)?)?$/;
+
+// Radix Select does not allow empty string as an item value — use a sentinel.
+const TZ_NONE = "__none__";
+
+function tzToSelect(tz: string | null | undefined): string {
+  return tz ?? TZ_NONE;
+}
+function selectToTz(v: string): string | null {
+  return v === TZ_NONE ? null : v;
+}
+
+const BASE_TZ_OPTIONS = [
+  { value: TZ_NONE,               label: "None (naive)" },
+  { value: "UTC",                 label: "UTC" },
+  { value: "America/New_York",    label: "America/New_York" },
+  { value: "America/Los_Angeles", label: "America/Los_Angeles" },
+  { value: "Europe/London",       label: "Europe/London" },
+  { value: "Europe/Paris",        label: "Europe/Paris" },
+  { value: "Europe/Rome",         label: "Europe/Rome" },
+  { value: "Asia/Tokyo",          label: "Asia/Tokyo" },
+  { value: "Asia/Shanghai",       label: "Asia/Shanghai" },
+  { value: "Australia/Sydney",    label: "Australia/Sydney" },
+];
+
+// Ensure the column's own timezone always appears in the list.
+function buildTzOptions(colTz: string | null) {
+  if (!colTz || BASE_TZ_OPTIONS.some((o) => o.value === colTz)) return BASE_TZ_OPTIONS;
+  return [{ value: colTz, label: colTz }, ...BASE_TZ_OPTIONS];
 }
 
 // ── Immutable tree helpers ────────────────────────────────────────────────
@@ -133,14 +192,29 @@ function ConditionRow({
   onChange,
   onRemove,
 }: ConditionRowProps) {
-  const colIdx = columns.indexOf(condition.column);
-  const dtype = dtypes[colIdx] ?? "object";
-  const ops = OPERATORS[getDtypeCategory(dtype)];
+  const colIdx    = columns.indexOf(condition.column);
+  const dtype     = dtypes[colIdx] ?? "object";
+  const cat       = getDtypeCategory(dtype);
+  const ops       = OPERATORS[cat];
+  const isDatetime = cat === "datetime";
+  const noValue   = NO_VALUE_OPS.has(condition.operator);
+
+  const isInvalid =
+    isDatetime && !noValue && condition.value !== "" && !DATETIME_RE.test(condition.value);
+
+  const tzOptions = buildTzOptions(condition.col_timezone ?? null);
 
   const handleColChange = (col: string) => {
-    const idx = columns.indexOf(col);
+    const idx    = columns.indexOf(col);
     const newType = dtypes[idx] ?? "object";
-    onChange({ column: col, operator: defaultOp(newType) });
+    const colTz  = extractColTimezone(newType);
+    onChange({
+      column:          col,
+      operator:        defaultOp(newType),
+      dtype_category:  getDtypeCategory(newType),
+      col_timezone:    colTz,
+      filter_timezone: colTz,
+    });
   };
 
   return (
@@ -164,7 +238,7 @@ function ConditionRow({
         value={condition.operator}
         onValueChange={(v) => onChange({ operator: v })}
       >
-        <SelectTrigger className="h-7 w-32 text-xs">
+        <SelectTrigger className="h-7 w-28 text-xs">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -176,13 +250,37 @@ function ConditionRow({
         </SelectContent>
       </Select>
 
-      {/* Value */}
-      <Input
-        className="h-7 flex-1 min-w-0 text-xs"
-        placeholder="value…"
-        value={condition.value}
-        onChange={(e) => onChange({ value: e.target.value })}
-      />
+      {/* Value — hidden for null operators */}
+      {!noValue && (
+        <Input
+          className={cn(
+            "h-7 flex-1 min-w-0 text-xs",
+            isInvalid && "border-destructive focus-visible:ring-destructive",
+          )}
+          placeholder={isDatetime ? datetimePlaceholder(dtype) : "value…"}
+          value={condition.value}
+          onChange={(e) => onChange({ value: e.target.value })}
+        />
+      )}
+
+      {/* Timezone selector — datetime columns only, hidden for null operators */}
+      {isDatetime && !noValue && (
+        <Select
+          value={tzToSelect(condition.filter_timezone)}
+          onValueChange={(v) => onChange({ filter_timezone: selectToTz(v) })}
+        >
+          <SelectTrigger className="h-7 w-36 text-xs shrink-0">
+            <SelectValue placeholder="tz…" />
+          </SelectTrigger>
+          <SelectContent>
+            {tzOptions.map((tz) => (
+              <SelectItem key={tz.value} value={tz.value} className="text-xs">
+                {tz.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
 
       {/* Remove */}
       <button
@@ -224,13 +322,17 @@ function GroupEditor({
   const color = GROUP_COLORS[depth % GROUP_COLORS.length];
 
   const addCondition = () => {
-    const dtype = dtypes[0] ?? "object";
+    const dtype  = dtypes[0] ?? "object";
+    const colTz  = extractColTimezone(dtype);
     const cond: FilterCondition = {
-      type: "condition",
-      id: newFilterId(),
-      column: columns[0] ?? "",
-      operator: defaultOp(dtype),
-      value: "",
+      type:            "condition",
+      id:              newFilterId(),
+      column:          columns[0] ?? "",
+      operator:        defaultOp(dtype),
+      value:           "",
+      dtype_category:  getDtypeCategory(dtype),
+      col_timezone:    colTz,
+      filter_timezone: colTz,
     };
     onUpdate(addChild(group, group.id, cond) as FilterGroup);
   };

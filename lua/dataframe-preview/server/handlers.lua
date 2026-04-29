@@ -28,11 +28,13 @@ local log = require("dataframe-preview.utils.logging")
 local M = {}
 
 -- Helper: send a JSON error frame to the browser.
--- Used whenever something goes wrong so the UI can display it.
+-- `uuid` is included so the multi-session frontend can route the error
+-- to the correct tab.  Pass nil when no session is associated.
 ---@param client uv_tcp_t
+---@param uuid   string|nil
 ---@param msg    string
-local function send_error(client, msg)
-  client:write(ws.encode_json({ type = "error", message = msg }))
+local function send_error(client, uuid, msg)
+  client:write(ws.encode_json({ type = "error", session = uuid, message = msg }))
 end
 
 -- ---------------------------------------------------------------------------
@@ -52,14 +54,14 @@ function M.on_init(uuid, client)
   local session = session_store.get(uuid)
   if not session then
     -- This can happen if the user manually types a URL with a made-up UUID.
-    send_error(client, "Unknown session: " .. uuid)
+    send_error(client, uuid, "Unknown session: " .. uuid)
     return
   end
 
   if not session.metadata then
     -- Should not happen in normal flow (orchestrator always stores metadata
     -- before opening the browser), but guard defensively.
-    send_error(client, "Metadata not yet available for session: " .. uuid)
+    send_error(client, uuid, "Metadata not yet available for session: " .. uuid)
     return
   end
 
@@ -105,7 +107,7 @@ end
 function M.on_fetch_rows(uuid, offset, limit, client, dap_provider)
   local session = session_store.get(uuid)
   if not session then
-    send_error(client, "Unknown session: " .. uuid)
+    send_error(client, uuid, "Unknown session: " .. uuid)
     return
   end
 
@@ -121,7 +123,7 @@ function M.on_fetch_rows(uuid, offset, limit, client, dap_provider)
   -- active when :PreviewDataFrame was called, ensuring the variable is in scope.
   dap_provider:evaluate(expr, session.frame_id, function(err, result)
     if err then
-      send_error(client, "Row fetch failed: " .. err)
+      send_error(client, uuid, "Row fetch failed: " .. err)
       return
     end
 
@@ -129,7 +131,7 @@ function M.on_fetch_rows(uuid, offset, limit, client, dap_provider)
     -- pcall catches any JSON decode or format errors without crashing.
     local ok, rows = pcall(lang_provider.parse_rows, lang_provider, result)
     if not ok then
-      send_error(client, "Row parse failed: " .. tostring(rows))
+      send_error(client, uuid, "Row parse failed: " .. tostring(rows))
       return
     end
 
@@ -154,7 +156,7 @@ end
 function M.on_apply_sort_filter(uuid, sort, filter_tree, client, dap_provider)
   local session = session_store.get(uuid)
   if not session then
-    send_error(client, "Unknown session: " .. uuid)
+    send_error(client, uuid, "Unknown session: " .. uuid)
     return
   end
 
@@ -166,13 +168,13 @@ function M.on_apply_sort_filter(uuid, sort, filter_tree, client, dap_provider)
 
   dap_provider:evaluate(meta_expr, session.frame_id, function(err, result)
     if err then
-      send_error(client, "apply_sort_filter evaluate failed: " .. err)
+      send_error(client, uuid, "apply_sort_filter evaluate failed: " .. err)
       return
     end
 
     local ok, metadata = pcall(lang_provider.parse_metadata, lang_provider, result)
     if not ok then
-      send_error(client, "apply_sort_filter metadata parse failed")
+      send_error(client, uuid, "apply_sort_filter metadata parse failed")
       return
     end
 
@@ -226,7 +228,7 @@ function M.dispatch(payload, client, dap_provider)
   -- propagating an error up to the libuv callback and crashing the server.
   local ok, msg = pcall(vim.json.decode, payload)
   if not ok or type(msg) ~= "table" then
-    send_error(client, "Invalid message format")
+    send_error(client, nil, "Invalid message format")
     return
   end
 
