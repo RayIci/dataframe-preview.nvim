@@ -205,6 +205,17 @@ function M.on_list_sessions(client)
 end
 
 -- ---------------------------------------------------------------------------
+-- M.on_close_session(uuid)
+--
+-- Handles a request from the browser to close/remove a session.
+-- Removes the session from the store; no DAP interaction needed.
+-- ---------------------------------------------------------------------------
+function M.on_close_session(uuid)
+  session_store.remove(uuid)
+  log.debug("handlers: session closed: " .. tostring(uuid))
+end
+
+-- ---------------------------------------------------------------------------
 -- M.dispatch(payload, client, dap_provider)
 --
 -- Entry point called by server.lua for every incoming WebSocket text frame.
@@ -229,6 +240,8 @@ function M.dispatch(payload, client, dap_provider)
     M.on_apply_sort_filter(msg.session, msg.sort or {}, msg.filter_tree, client, dap_provider)
   elseif msg_type == "list_sessions" then
     M.on_list_sessions(client)
+  elseif msg_type == "close_session" then
+    M.on_close_session(msg.session)
   else
     log.warn("handlers: unknown message type: " .. tostring(msg_type))
   end

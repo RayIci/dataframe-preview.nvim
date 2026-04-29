@@ -2,6 +2,7 @@ import { useDataStore } from "@/store/dataStore";
 import { useSessionStore } from "@/store/sessionStore";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { Navbar } from "@/components/Navbar";
+import { MetadataBar } from "@/components/MetadataBar";
 import { FilterBar } from "@/components/FilterBar";
 import { DataGrid } from "@/components/DataGrid";
 
@@ -22,7 +23,7 @@ function EmptyState() {
 }
 
 export function App() {
-  const { fetchRows, applySortFilter, initSession } = useWebSocket();
+  const { fetchRows, applySortFilter, initSession, closeSession } = useWebSocket();
   const sessions   = useSessionStore((s) => s.sessions);
   const activeUuid = useSessionStore((s) => s.activeUuid);
   const activeMeta = useDataStore(
@@ -31,7 +32,8 @@ export function App() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <Navbar initSession={initSession} />
+      <Navbar initSession={initSession} closeSession={closeSession} />
+      <MetadataBar />
 
       {sessions.length === 0 ? (
         <EmptyState />

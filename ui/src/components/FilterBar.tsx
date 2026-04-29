@@ -543,9 +543,9 @@ export function FilterBar({
               {availableSortCols.length > 0 && (
                 <Select onValueChange={addSortCol}>
                   <SelectTrigger className="h-6 w-28 text-[10px]">
-                    <span className="flex items-center gap-1 text-muted-foreground">
+                    <div className="flex items-center gap-1 text-muted-foreground">
                       <Plus size={10} /> add column
-                    </span>
+                    </div>
                   </SelectTrigger>
                   <SelectContent>
                     {availableSortCols.map((c) => (

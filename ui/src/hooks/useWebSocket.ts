@@ -64,6 +64,14 @@ export function useWebSocket() {
     [send]
   );
 
+  const closeSession = useCallback(
+    (uuid: string) => {
+      send({ type: "close_session", session: uuid });
+      useSessionStore.getState().removeSession(uuid);
+    },
+    [send]
+  );
+
   useEffect(() => {
     const sock = new WebSocket(`ws://${window.location.host}/ws`);
     wsRef.current = sock;
@@ -121,5 +129,5 @@ export function useWebSocket() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { fetchRows, applySortFilter, initSession };
+  return { fetchRows, applySortFilter, initSession, closeSession };
 }
