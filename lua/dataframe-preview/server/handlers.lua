@@ -218,6 +218,50 @@ function M.on_close_session(uuid)
 end
 
 -- ---------------------------------------------------------------------------
+-- M.on_refresh(uuid, client, dap_provider)
+--
+-- Re-evaluates the DataFrame metadata from DAP, preserving the current sort
+-- and filter.  Unlike on_init, this always hits DAP rather than returning
+-- cached data.  The browser will receive an updated "meta" message and then
+-- re-fetch rows from offset 0 (after having cleared its own row cache).
+-- ---------------------------------------------------------------------------
+function M.on_refresh(uuid, client, dap_provider)
+  local session = session_store.get(uuid)
+  if not session then
+    send_error(client, uuid, "Unknown session: " .. uuid)
+    return
+  end
+
+  local lang_provider = session.lang_provider
+  local meta_expr = lang_provider:metadata_expr(session.var_name, session.filter_tree)
+
+  dap_provider:evaluate(meta_expr, session.frame_id, function(err, result)
+    if err then
+      send_error(client, uuid, "Refresh evaluate failed: " .. err)
+      return
+    end
+
+    local ok, metadata = pcall(lang_provider.parse_metadata, lang_provider, result)
+    if not ok then
+      send_error(client, uuid, "Refresh metadata parse failed")
+      return
+    end
+
+    session.metadata = metadata
+
+    client:write(ws.encode_json({
+      type = "meta",
+      session = uuid,
+      var_name = session.var_name,
+      row_count = metadata.row_count,
+      col_count = metadata.col_count,
+      columns = metadata.columns,
+      dtypes = metadata.dtypes,
+    }))
+  end)
+end
+
+-- ---------------------------------------------------------------------------
 -- M.dispatch(payload, client, dap_provider)
 --
 -- Entry point called by server.lua for every incoming WebSocket text frame.
@@ -244,6 +288,8 @@ function M.dispatch(payload, client, dap_provider)
     M.on_list_sessions(client)
   elseif msg_type == "close_session" then
     M.on_close_session(msg.session)
+  elseif msg_type == "refresh" then
+    M.on_refresh(msg.session, client, dap_provider)
   else
     log.warn("handlers: unknown message type: " .. tostring(msg_type))
   end

@@ -72,6 +72,15 @@ export function useWebSocket() {
     [send]
   );
 
+  const refreshSession = useCallback(
+    (uuid: string) => {
+      useDataStore.getState().resetRowCache(uuid);
+      pendingRef.current.set(uuid, new Set());
+      send({ type: "refresh", session: uuid });
+    },
+    [send]
+  );
+
   useEffect(() => {
     const sock = new WebSocket(`ws://${window.location.host}/ws`);
     wsRef.current = sock;
@@ -131,5 +140,5 @@ export function useWebSocket() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { fetchRows, applySortFilter, initSession, closeSession };
+  return { fetchRows, applySortFilter, initSession, closeSession, refreshSession };
 }

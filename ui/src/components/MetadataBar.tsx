@@ -1,5 +1,8 @@
+import { useState, useCallback } from "react";
+import { RefreshCw } from "lucide-react";
 import { useDataStore } from "@/store/dataStore";
 import { useSessionStore } from "@/store/sessionStore";
+import { cn } from "@/lib/utils";
 
 function dtypeSummary(dtypes: string[]): { key: string; count: number }[] {
   const map = new Map<string, number>();
@@ -11,11 +14,24 @@ function dtypeSummary(dtypes: string[]): { key: string; count: number }[] {
     .map(([key, count]) => ({ key, count }));
 }
 
-export function MetadataBar() {
+interface MetadataBarProps {
+  refreshSession: (uuid: string) => void;
+}
+
+export function MetadataBar({ refreshSession }: MetadataBarProps) {
   const activeUuid = useSessionStore((s) => s.activeUuid);
   const meta = useDataStore((s) =>
     activeUuid ? (s.getData(activeUuid)?.meta ?? null) : null
   );
+
+  const [spinning, setSpinning] = useState(false);
+
+  const handleRefresh = useCallback(() => {
+    if (!activeUuid || spinning) return;
+    setSpinning(true);
+    refreshSession(activeUuid);
+    setTimeout(() => setSpinning(false), 800);
+  }, [activeUuid, spinning, refreshSession]);
 
   if (!meta) return null;
 
@@ -37,6 +53,19 @@ export function MetadataBar() {
           </span>
         ))}
       </div>
+
+      <div className="flex-1" />
+
+      <button
+        onClick={handleRefresh}
+        className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+        title="Refresh DataFrame"
+      >
+        <RefreshCw
+          size={12}
+          className={cn(spinning && "animate-spin")}
+        />
+      </button>
     </div>
   );
 }

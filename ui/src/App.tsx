@@ -23,7 +23,7 @@ function EmptyState() {
 }
 
 export function App() {
-  const { fetchRows, applySortFilter, initSession, closeSession } = useWebSocket();
+  const { fetchRows, applySortFilter, initSession, closeSession, refreshSession } = useWebSocket();
   const sessions   = useSessionStore((s) => s.sessions);
   const activeUuid = useSessionStore((s) => s.activeUuid);
   const activeMeta = useDataStore(
@@ -33,7 +33,7 @@ export function App() {
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <Navbar initSession={initSession} closeSession={closeSession} />
-      <MetadataBar />
+      <MetadataBar refreshSession={refreshSession} />
 
       {sessions.length === 0 ? (
         <EmptyState />

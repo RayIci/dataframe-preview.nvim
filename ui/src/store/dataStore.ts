@@ -71,6 +71,7 @@ export interface SessionData {
   sort:          SortEntry[];
   filterTree:    FilterGroup;
   scrollVersion: number;
+  lockedRows:    number[];  // row indices pinned to top, in display order (ephemeral)
 }
 
 function emptySessionData(): SessionData {
@@ -82,6 +83,7 @@ function emptySessionData(): SessionData {
     sort:          [],
     filterTree:    emptyFilterTree(),
     scrollVersion: 0,
+    lockedRows:    [],
   };
 }
 
@@ -93,15 +95,18 @@ interface DataStore {
   dataByUuid: Map<string, SessionData>;
   wsStatus:   "connecting" | "open" | "closed" | "error";
 
-  initSession:   (uuid: string) => void;
-  setMeta:       (uuid: string, meta: Meta) => void;
-  addRows:       (uuid: string, offset: number, rows: RowChunk) => void;
-  setError:      (uuid: string, msg: string | null) => void;
-  setSortFilter: (uuid: string, sort: SortEntry[], filterTree: FilterGroup) => void;
-  setWsStatus:   (s: DataStore["wsStatus"]) => void;
-  getData:       (uuid: string) => SessionData | undefined;
-  hasRows:       (uuid: string, offset: number) => boolean;
-  getRow:        (uuid: string, index: number) => RowCell[] | undefined;
+  initSession:      (uuid: string) => void;
+  setMeta:          (uuid: string, meta: Meta) => void;
+  addRows:          (uuid: string, offset: number, rows: RowChunk) => void;
+  setError:         (uuid: string, msg: string | null) => void;
+  setSortFilter:    (uuid: string, sort: SortEntry[], filterTree: FilterGroup) => void;
+  resetRowCache:    (uuid: string) => void;
+  toggleLockedRow:  (uuid: string, rowIndex: number) => void;
+  reorderLockedRows:(uuid: string, from: number, to: number) => void;
+  setWsStatus:      (s: DataStore["wsStatus"]) => void;
+  getData:          (uuid: string) => SessionData | undefined;
+  hasRows:          (uuid: string, offset: number) => boolean;
+  getRow:           (uuid: string, index: number) => RowCell[] | undefined;
 }
 
 function patchSession(
@@ -156,6 +161,36 @@ export const useDataStore = create<DataStore>((set, get) => ({
           scrollVersion: session.scrollVersion + 1,
         }),
       };
+    }),
+
+  resetRowCache: (uuid) =>
+    set((s) => {
+      const session = s.dataByUuid.get(uuid) ?? emptySessionData();
+      return {
+        dataByUuid: patchSession(s.dataByUuid, uuid, {
+          rowCache:      new Map(),
+          scrollVersion: session.scrollVersion + 1,
+        }),
+      };
+    }),
+
+  toggleLockedRow: (uuid, rowIndex) =>
+    set((s) => {
+      const session = s.dataByUuid.get(uuid) ?? emptySessionData();
+      const locked = session.lockedRows;
+      const next = locked.includes(rowIndex)
+        ? locked.filter((r) => r !== rowIndex)
+        : [...locked, rowIndex];
+      return { dataByUuid: patchSession(s.dataByUuid, uuid, { lockedRows: next }) };
+    }),
+
+  reorderLockedRows: (uuid, from, to) =>
+    set((s) => {
+      const session = s.dataByUuid.get(uuid) ?? emptySessionData();
+      const rows = [...session.lockedRows];
+      const [item] = rows.splice(from, 1);
+      rows.splice(to, 0, item);
+      return { dataByUuid: patchSession(s.dataByUuid, uuid, { lockedRows: rows }) };
     }),
 
   setWsStatus: (wsStatus) => set({ wsStatus }),
