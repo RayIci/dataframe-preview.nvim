@@ -71,13 +71,13 @@ function M.on_init(uuid, client)
   -- and know how many rows to expect.  `session` (the uuid) is included so
   -- the multi-session frontend can route this response to the right tab.
   client:write(ws.encode_json({
-    type = "meta",
-    session = uuid,
-    var_name = session.var_name,
+    type      = "meta",
+    session   = uuid,
+    var_name  = session.var_name,
     row_count = meta.row_count,
     col_count = meta.col_count,
-    columns = meta.columns,
-    dtypes = meta.dtypes,
+    columns   = meta.columns,
+    dtypes    = meta.dtypes,
   }))
 end
 
@@ -181,13 +181,13 @@ function M.on_apply_sort_filter(uuid, sort, filter_tree, client, dap_provider)
     session.metadata = metadata
 
     client:write(ws.encode_json({
-      type = "meta",
-      session = uuid,
-      var_name = session.var_name,
+      type      = "meta",
+      session   = uuid,
+      var_name  = session.var_name,
       row_count = metadata.row_count,
       col_count = metadata.col_count,
-      columns = metadata.columns,
-      dtypes = metadata.dtypes,
+      columns   = metadata.columns,
+      dtypes    = metadata.dtypes,
     }))
   end)
 end
@@ -250,13 +250,13 @@ function M.on_refresh(uuid, client, dap_provider)
     session.metadata = metadata
 
     client:write(ws.encode_json({
-      type = "meta",
-      session = uuid,
-      var_name = session.var_name,
+      type      = "meta",
+      session   = uuid,
+      var_name  = session.var_name,
       row_count = metadata.row_count,
       col_count = metadata.col_count,
-      columns = metadata.columns,
-      dtypes = metadata.dtypes,
+      columns   = metadata.columns,
+      dtypes    = metadata.dtypes,
     }))
   end)
 end

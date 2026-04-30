@@ -280,8 +280,10 @@ function PythonPandas:rows_expr(var_name, offset, limit, sort, filter_tree)
   local slice =
     string.format("%s.iloc[%d:%d]", apply_sort(apply_filter_tree(var_name, filter_tree), sort), offset, offset + limit)
   return string.format(
-    "__import__('json').dumps(%s.pipe(lambda _s: _s.astype(object).where(_s.notna(), None)).values.tolist(), "
-      .. "default=str)",
+    "__import__('json').dumps("
+      .. "%s"
+      .. ".pipe(lambda _s: _s.astype(object).where(_s.notna(), None))"
+      .. ".values.tolist(), default=str)",
     slice
   )
 end
@@ -300,8 +302,8 @@ function PythonPandas:parse_metadata(raw)
   return {
     row_count = decoded.shape[1],
     col_count = decoded.shape[2],
-    columns = decoded.columns,
-    dtypes = decoded.dtypes,
+    columns   = decoded.columns,
+    dtypes    = decoded.dtypes,
   }
 end
 

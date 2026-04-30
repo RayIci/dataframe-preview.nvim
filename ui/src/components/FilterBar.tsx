@@ -224,7 +224,7 @@ function ConditionRow({
         <SelectTrigger className="h-7 w-32 text-xs">
           <SelectValue />
         </SelectTrigger>
-        <SelectContent>
+        <SelectContent className="max-h-56 overflow-y-auto">
           {columns.map((c) => (
             <SelectItem key={c} value={c} className="text-xs">
               {c}

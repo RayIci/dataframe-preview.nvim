@@ -31,8 +31,20 @@ function M.setup(opts)
     local ft = vim.bo.filetype
     local providers = lang_providers[ft]
     if not providers or #providers == 0 then
-      Logging.error("dataframe-preview: no providers configured for filetype '" .. ft .. "'")
-      return
+      -- Filetype not registered (e.g. dap-repl, scratch buffer).
+      -- Collect all providers from all filetypes and let the orchestrator's
+      -- can_handle_expr resolution pick the right one.
+      local all = {}
+      for _, ps in pairs(lang_providers) do
+        for _, p in ipairs(ps) do
+          all[#all + 1] = p
+        end
+      end
+      if #all == 0 then
+        Logging.error("dataframe-preview: no providers configured")
+        return
+      end
+      providers = all
     end
     Orchestrator.preview(dap_provider, providers)
   end)
