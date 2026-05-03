@@ -1,10 +1,11 @@
 local classes = require("dataframe-preview.utils.classes")
 
 ---@class Metadata
----@field row_count integer
----@field col_count integer
----@field columns  string[]
----@field dtypes   string[]
+---@field row_count     integer
+---@field col_count     integer
+---@field columns       string[]
+---@field dtypes        string[]
+---@field index_columns string[]  -- named index level names; empty for default RangeIndex
 
 ---@class SortEntry
 ---@field column    string   -- column name to sort by
@@ -32,13 +33,14 @@ function LanguageProvider:metadata_expr(var_name, filter_tree)
 end
 
 ---Returns a read-only DAP evaluate expression that produces a JSON array of rows.
----@param var_name    string
----@param offset      integer
----@param limit       integer
----@param sort        SortEntry[]|nil   -- optional multi-column sort
----@param filter_tree FilterNode|nil    -- optional recursive filter tree
+---@param var_name      string
+---@param offset        integer
+---@param limit         integer
+---@param sort          SortEntry[]|nil   -- optional multi-column sort
+---@param filter_tree   FilterNode|nil    -- optional recursive filter tree
+---@param index_columns string[]|nil      -- named index levels; non-empty triggers reset_index() base
 ---@return string
-function LanguageProvider:rows_expr(var_name, offset, limit, sort, filter_tree)
+function LanguageProvider:rows_expr(var_name, offset, limit, sort, filter_tree, index_columns)
   classes.not_implemented_error("LanguageProvider:rows_expr")
 end
 

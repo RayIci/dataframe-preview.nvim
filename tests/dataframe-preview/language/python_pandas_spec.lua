@@ -21,22 +21,77 @@ describe("PythonPandas.rows_expr", function()
     local expr = provider:rows_expr("df", 50, 100)
     assert.truthy(expr:find("iloc%[50:150%]"))
   end)
+
+  it("uses reset_index() base when index_columns is non-empty", function()
+    local expr = provider:rows_expr("df", 0, 100, nil, nil, { "date" })
+    assert.truthy(expr:find("reset_index", 1, true))
+  end)
+
+  it("does not use reset_index() when index_columns is empty", function()
+    local expr = provider:rows_expr("df", 0, 100, nil, nil, {})
+    assert.falsy(expr:find("reset_index", 1, true))
+  end)
 end)
 
 describe("PythonPandas.parse_metadata", function()
   local provider = PythonPandas.new()
 
-  it("parses a valid response", function()
+  it("parses a valid response with no named index", function()
     local raw = vim.json.encode({
       shape = { 1000, 5 },
       columns = { "a", "b", "c", "d", "e" },
       dtypes = { "int64", "object", "float64", "bool", "datetime64[ns]" },
+      index_columns = {},
     })
     local meta = provider:parse_metadata(raw)
     assert.equal(1000, meta.row_count)
     assert.equal(5, meta.col_count)
     assert.equal(5, #meta.columns)
     assert.equal("int64", meta.dtypes[1])
+    assert.equal(0, #meta.index_columns)
+  end)
+
+  it("parses a response with a named index column prepended", function()
+    local raw = vim.json.encode({
+      shape = { 500, 3 },
+      columns = { "date", "open", "close", "volume" },
+      dtypes = { "datetime64[ns]", "float64", "float64", "int64" },
+      index_columns = { "date" },
+    })
+    local meta = provider:parse_metadata(raw)
+    assert.equal(500, meta.row_count)
+    assert.equal(4, meta.col_count)
+    assert.equal(4, #meta.columns)
+    assert.equal("date", meta.columns[1])
+    assert.equal(1, #meta.index_columns)
+    assert.equal("date", meta.index_columns[1])
+  end)
+
+  it("parses a response where pandas named an unnamed index 'index'", function()
+    -- Simulates df.index = pd.date_range(...) with no .name set.
+    -- pandas reset_index() names such a column "index" automatically.
+    local raw = vim.json.encode({
+      shape = { 100, 2 },
+      columns = { "index", "value" },
+      dtypes = { "datetime64[ns]", "float64" },
+      index_columns = { "index" },
+    })
+    local meta = provider:parse_metadata(raw)
+    assert.equal(100, meta.row_count)
+    assert.equal(2, meta.col_count)
+    assert.equal("index", meta.columns[1])
+    assert.equal(1, #meta.index_columns)
+    assert.equal("index", meta.index_columns[1])
+  end)
+
+  it("tolerates missing index_columns field (legacy server response)", function()
+    local raw = vim.json.encode({
+      shape = { 10, 2 },
+      columns = { "x", "y" },
+      dtypes = { "int64", "float64" },
+    })
+    local meta = provider:parse_metadata(raw)
+    assert.equal(0, #meta.index_columns)
   end)
 
   it("raises on invalid JSON", function()

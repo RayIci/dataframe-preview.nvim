@@ -15,7 +15,7 @@ import { LoadingSkeleton } from "./LoadingSkeleton";
 import { ScrollToTop } from "./ScrollToTop";
 import { useColumnResize } from "@/hooks/useColumnResize";
 import { useLockedCols } from "@/hooks/useLockedCols";
-import { Pin, GripVertical } from "lucide-react";
+import { Pin, GripVertical, KeyRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const ROW_HEIGHT    = 32;
@@ -136,6 +136,8 @@ export function DataGrid({ uuid, fetchRows, applySortFilter }: DataGridProps) {
   const unlocked     = meta.columns.filter((c) => !lockedColSet.has(c));
   const orderedCols  = [...activeLocked, ...unlocked];
 
+  const indexColSet = new Set(meta.index_columns ?? []);
+
   const totalWidth = ROW_INDEX_W + orderedCols.reduce((sum, c) => sum + getWidth(c), 0);
 
   return (
@@ -168,6 +170,8 @@ export function DataGrid({ uuid, fetchRows, applySortFilter }: DataGridProps) {
                 const isLocked     = lockedColSet.has(col);
                 const lockedIdx    = activeLocked.indexOf(col);
                 const isLastLocked = isLocked && lockedIdx === activeLocked.length - 1;
+
+                const isIdx = indexColSet.has(col);
 
                 return (
                   <div
@@ -205,7 +209,13 @@ export function DataGrid({ uuid, fetchRows, applySortFilter }: DataGridProps) {
                         {isFiltered && (
                           <span className="shrink-0 size-1.5 rounded-full bg-amber-400" title="Filtered" />
                         )}
-                        <span className={cn("truncate text-[11px] font-semibold leading-tight", sortEntry ? "text-primary" : "text-foreground")}>
+                        {isIdx && (
+                          <KeyRound size={10} className="shrink-0 text-muted-foreground/50" />
+                        )}
+                        <span className={cn(
+                          "truncate text-[11px] font-semibold leading-tight",
+                          sortEntry ? "text-primary" : isIdx ? "italic text-muted-foreground/70" : "text-foreground"
+                        )}>
                           {col}
                         </span>
                       </div>

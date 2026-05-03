@@ -71,13 +71,14 @@ function M.on_init(uuid, client)
   -- and know how many rows to expect.  `session` (the uuid) is included so
   -- the multi-session frontend can route this response to the right tab.
   client:write(ws.encode_json({
-    type      = "meta",
-    session   = uuid,
-    var_name  = session.var_name,
+    type = "meta",
+    session = uuid,
+    var_name = session.var_name,
     row_count = meta.row_count,
     col_count = meta.col_count,
-    columns   = meta.columns,
-    dtypes    = meta.dtypes,
+    columns = meta.columns,
+    dtypes = meta.dtypes,
+    index_columns = meta.index_columns,
   }))
 end
 
@@ -115,8 +116,11 @@ function M.on_fetch_rows(uuid, offset, limit, client, dap_provider)
 
   -- Build the language-specific DAP evaluate expression, incorporating any
   -- active sort and filter from the session so the slice is consistent with
-  -- the current view state.
-  local expr = lang_provider:rows_expr(session.var_name, offset, limit, session.sort, session.filter_tree)
+  -- the current view state.  index_columns is forwarded so providers that use
+  -- reset_index() know which levels to promote (avoids a runtime Python check).
+  local index_columns = session.metadata and session.metadata.index_columns or {}
+  local expr =
+    lang_provider:rows_expr(session.var_name, offset, limit, session.sort, session.filter_tree, index_columns)
 
   -- Evaluate the expression in the debugger.
   -- `session.frame_id` pins the evaluation to the exact stack frame that was
@@ -181,13 +185,14 @@ function M.on_apply_sort_filter(uuid, sort, filter_tree, client, dap_provider)
     session.metadata = metadata
 
     client:write(ws.encode_json({
-      type      = "meta",
-      session   = uuid,
-      var_name  = session.var_name,
+      type = "meta",
+      session = uuid,
+      var_name = session.var_name,
       row_count = metadata.row_count,
       col_count = metadata.col_count,
-      columns   = metadata.columns,
-      dtypes    = metadata.dtypes,
+      columns = metadata.columns,
+      dtypes = metadata.dtypes,
+      index_columns = metadata.index_columns,
     }))
   end)
 end
@@ -250,13 +255,14 @@ function M.on_refresh(uuid, client, dap_provider)
     session.metadata = metadata
 
     client:write(ws.encode_json({
-      type      = "meta",
-      session   = uuid,
-      var_name  = session.var_name,
+      type = "meta",
+      session = uuid,
+      var_name = session.var_name,
       row_count = metadata.row_count,
       col_count = metadata.col_count,
-      columns   = metadata.columns,
-      dtypes    = metadata.dtypes,
+      columns = metadata.columns,
+      dtypes = metadata.dtypes,
+      index_columns = metadata.index_columns,
     }))
   end)
 end

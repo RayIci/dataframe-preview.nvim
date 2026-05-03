@@ -3,11 +3,12 @@ import { create } from "zustand";
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export interface Meta {
-  var_name:  string;
-  row_count: number;
-  col_count: number;
-  columns:   string[];
-  dtypes:    string[];
+  var_name:      string;
+  row_count:     number;
+  col_count:     number;
+  columns:       string[];
+  dtypes:        string[];
+  index_columns?: string[];  // named index level names; absent/empty = no named index
 }
 
 export interface SortEntry {

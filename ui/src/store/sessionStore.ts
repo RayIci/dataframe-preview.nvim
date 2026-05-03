@@ -1,14 +1,15 @@
 import { create } from "zustand";
 
 export interface SessionInfo {
-  uuid:      string;
-  var_name:  string;
-  label:     string;
-  row_count: number;
-  col_count: number;
-  columns:   string[];
-  dtypes:    string[];
-  isNew:     boolean;
+  uuid:          string;
+  var_name:      string;
+  label:         string;
+  row_count:     number;
+  col_count:     number;
+  columns:       string[];
+  dtypes:        string[];
+  index_columns?: string[];
+  isNew:         boolean;
 }
 
 interface SessionStore {

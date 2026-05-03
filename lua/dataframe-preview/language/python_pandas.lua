@@ -46,7 +46,9 @@ end
 -- Wraps s as a Python single-quoted string literal, escaping backslashes and
 -- single quotes so the result is safe to embed in a generated Python expression.
 local function py_str(s)
-  if type(s) ~= "string" then return "''" end
+  if type(s) ~= "string" then
+    return "''"
+  end
   return "'" .. s:gsub("\\", "\\\\"):gsub("'", "\\'") .. "'"
 end
 
@@ -92,9 +94,9 @@ end
 -- Returns nil for nodes that contribute no condition (e.g. empty groups).
 local function build_filter_node(var_name, node)
   if node.type == "condition" then
-    local col    = py_str(node.column)
-    local val    = py_str(node.value)
-    local cat    = node.dtype_category or "string"
+    local col = py_str(node.column)
+    local val = py_str(node.value)
+    local cat = node.dtype_category or "string"
     local flt_tz = node_tz(node.filter_timezone)
     local col_tz = node_tz(node.col_timezone)
 
@@ -123,7 +125,7 @@ local function build_filter_node(var_name, node)
     elseif node.operator == "equals" then
       if cat == "datetime" then
         local dcol = dt_col_expr(var_name, col, col_tz, flt_tz)
-        local ts   = dt_ts_expr(val, flt_tz)
+        local ts = dt_ts_expr(val, flt_tz)
         if #node.value <= 10 then
           -- Date-only: floor to day so "2023-01-01" matches any time on that day.
           return string.format("(%s.dt.floor('D') == %s)", dcol, ts)
@@ -138,7 +140,7 @@ local function build_filter_node(var_name, node)
     elseif node.operator == "not_equals" then
       if cat == "datetime" then
         local dcol = dt_col_expr(var_name, col, col_tz, flt_tz)
-        local ts   = dt_ts_expr(val, flt_tz)
+        local ts = dt_ts_expr(val, flt_tz)
         if #node.value <= 10 then
           return string.format("(%s.dt.floor('D') != %s)", dcol, ts)
         else
@@ -151,33 +153,25 @@ local function build_filter_node(var_name, node)
       end
     elseif node.operator == "gt" then
       if cat == "datetime" then
-        return string.format(
-          "(%s > %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz)
-        )
+        return string.format("(%s > %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz))
       else
         return string.format("(%s[%s] > float(%s))", var_name, col, val)
       end
     elseif node.operator == "gte" then
       if cat == "datetime" then
-        return string.format(
-          "(%s >= %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz)
-        )
+        return string.format("(%s >= %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz))
       else
         return string.format("(%s[%s] >= float(%s))", var_name, col, val)
       end
     elseif node.operator == "lt" then
       if cat == "datetime" then
-        return string.format(
-          "(%s < %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz)
-        )
+        return string.format("(%s < %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz))
       else
         return string.format("(%s[%s] < float(%s))", var_name, col, val)
       end
     elseif node.operator == "lte" then
       if cat == "datetime" then
-        return string.format(
-          "(%s <= %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz)
-        )
+        return string.format("(%s <= %s)", dt_col_expr(var_name, col, col_tz, flt_tz), dt_ts_expr(val, flt_tz))
       else
         return string.format("(%s[%s] <= float(%s))", var_name, col, val)
       end
@@ -239,25 +233,56 @@ end
 ---@class PythonPandas : LanguageProvider
 local PythonPandas = setmetatable({}, { __index = LanguageProvider })
 
+-- Returns a Python expression for the effective filter/sort base.
+-- Any index that is not the default unnamed RangeIndex is promoted to regular
+-- columns via reset_index() so that sort/filter expressions work uniformly.
+-- The default unnamed RangeIndex is left untouched (# in the UI covers it).
+local function effective_base(var_name)
+  return string.format(
+    "(%s.reset_index() if not (isinstance(%s.index, __import__('pandas').RangeIndex)"
+      .. " and %s.index.name is None) else %s)",
+    var_name,
+    var_name,
+    var_name,
+    var_name
+  )
+end
+
 -- Returns a Python expression that evaluates to a JSON string containing:
---   { "shape": [rows, cols], "columns": [...], "dtypes": [...] }
+--   { "shape": [rows, cols], "columns": [...], "dtypes": [...], "index_columns": [...] }
 --
 -- When filter_tree is provided the shape reflects the filtered row count, while
--- columns and dtypes always come from the original (unfiltered) DataFrame.
+-- columns and dtypes always come from the original (unfiltered) effective base.
+--
+-- The effective base (eb) is reset_index() of var_name when the index is not the
+-- default unnamed RangeIndex, otherwise var_name itself.  Columns/dtypes are read
+-- from eb so that pandas handles the naming of unnamed index levels automatically
+-- (unnamed single index → "index"; unnamed MultiIndex levels → "level_0", etc.).
+-- index_columns contains the first nlevels columns of eb (those are the index cols).
 ---@param var_name    string
 ---@param filter_tree FilterNode|nil
 ---@return string
 function PythonPandas:metadata_expr(var_name, filter_tree)
-  local base = apply_filter_tree(var_name, filter_tree)
+  local eb = effective_base(var_name)
+  local base = apply_filter_tree(eb, filter_tree)
+  local has_idx = string.format(
+    "not (isinstance(%s.index, __import__('pandas').RangeIndex) and %s.index.name is None)",
+    var_name,
+    var_name
+  )
   return string.format(
     "__import__('json').dumps({"
       .. "'shape': list(%s.shape),"
-      .. "'columns': %s.columns.tolist(),"
-      .. "'dtypes': %s.dtypes.astype(str).tolist()"
+      .. "'columns': (%s).columns.tolist(),"
+      .. "'dtypes': (%s).dtypes.astype(str).tolist(),"
+      .. "'index_columns': ((%s).columns[:%s.index.nlevels].tolist() if (%s) else [])"
       .. "})",
     base,
+    eb,
+    eb,
+    eb,
     var_name,
-    var_name
+    has_idx
   )
 end
 
@@ -270,15 +295,20 @@ end
 --
 -- default=str — fallback serialiser for non-JSON-native types: Timestamp,
 --               numpy.int64, Decimal, etc.
----@param var_name    string
----@param offset      integer
----@param limit       integer
----@param sort        SortEntry[]|nil
----@param filter_tree FilterNode|nil
+--
+-- index_columns — when non-empty, reset_index() is called once on var_name so
+-- that named index levels appear as regular leading columns in every row.
+---@param var_name      string
+---@param offset        integer
+---@param limit         integer
+---@param sort          SortEntry[]|nil
+---@param filter_tree   FilterNode|nil
+---@param index_columns string[]|nil
 ---@return string
-function PythonPandas:rows_expr(var_name, offset, limit, sort, filter_tree)
+function PythonPandas:rows_expr(var_name, offset, limit, sort, filter_tree, index_columns)
+  local base_var = (index_columns and #index_columns > 0) and string.format("(%s.reset_index())", var_name) or var_name
   local slice =
-    string.format("%s.iloc[%d:%d]", apply_sort(apply_filter_tree(var_name, filter_tree), sort), offset, offset + limit)
+    string.format("%s.iloc[%d:%d]", apply_sort(apply_filter_tree(base_var, filter_tree), sort), offset, offset + limit)
   return string.format(
     "__import__('json').dumps("
       .. "%s"
@@ -298,12 +328,14 @@ function PythonPandas:parse_metadata(raw)
   if not ok or not decoded then
     error("PythonPandas: failed to parse metadata: " .. tostring(raw))
   end
-  -- decoded.shape is [rows, cols] — Lua tables are 1-indexed.
+  -- col_count uses columns length (includes index levels) rather than shape[2]
+  -- (which only counts data columns) so the two stay in sync.
   return {
     row_count = decoded.shape[1],
-    col_count = decoded.shape[2],
-    columns   = decoded.columns,
-    dtypes    = decoded.dtypes,
+    col_count = #decoded.columns,
+    columns = decoded.columns,
+    dtypes = decoded.dtypes,
+    index_columns = decoded.index_columns or {},
   }
 end
 

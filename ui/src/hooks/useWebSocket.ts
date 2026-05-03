@@ -111,11 +111,12 @@ export function useWebSocket() {
       } else if (msg.type === "meta") {
         const uuid = msg.session as string;
         useDataStore.getState().setMeta(uuid, {
-          var_name:  msg.var_name  as string,
-          row_count: msg.row_count as number,
-          col_count: msg.col_count as number,
-          columns:   msg.columns   as string[],
-          dtypes:    msg.dtypes    as string[],
+          var_name:      msg.var_name      as string,
+          row_count:     msg.row_count     as number,
+          col_count:     msg.col_count     as number,
+          columns:       msg.columns       as string[],
+          dtypes:        msg.dtypes        as string[],
+          index_columns: msg.index_columns as string[] | undefined,
         });
         fetchRows(uuid, 0);
 
