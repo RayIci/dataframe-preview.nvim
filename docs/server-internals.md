@@ -149,7 +149,7 @@ Sessions are keyed by UUID and hold:
 ---@class Session
 ---@field var_name      string           -- "df_users"
 ---@field frame_id      integer          -- DAP stack frame ID
----@field metadata      Metadata|nil     -- row_count, col_count, columns, dtypes
+---@field metadata      Metadata|nil     -- row_count, col_count, columns, dtypes, index_columns
 ---@field ws_client     uv_tcp_t|nil     -- attached after WebSocket init message
 ---@field lang_provider LanguageProvider -- provider resolved at preview time
 ---@field sort          SortEntry[]      -- active multi-column sort (default: {})
@@ -172,7 +172,7 @@ Sessions are never automatically garbage-collected during a Neovim session (they
 
 1. Calls `session_store.attach_client(uuid, client)` to register the WebSocket handle.
 2. Looks up `session.metadata` (already computed by the orchestrator before the browser even connected).
-3. Sends `{ type:"meta", var_name, row_count, col_count, columns, dtypes }`.
+3. Sends `{ type:"meta", var_name, row_count, col_count, columns, dtypes, index_columns }`.
 
 ### `on_fetch_rows(uuid, offset, limit, client, dap_provider, lang_provider)`
 
@@ -193,7 +193,19 @@ Sessions are never automatically garbage-collected during a Neovim session (they
 
 After this response the frontend will re-issue `fetch_rows` requests; those calls read `session.sort` and `session.filter_tree` automatically, so the returned rows already reflect the active sort/filter.
 
-All three handlers send `{ type:"error", message }` on any failure so the UI can display it.
+### `on_list_sessions(client)`
+
+Replies immediately with `{ type:"sessions_list", sessions:[…] }` where each entry is a summary of every fully-initialized session in the store (`uuid`, `var_name`, `row_count`, `col_count`, `columns`, `dtypes`, `index_columns`). The browser sends this on every WebSocket open to re-populate its session tabs after a page reload or reconnect.
+
+### `on_close_session(uuid)`
+
+Removes the session from the store. Called when the user closes a browser tab. After removal the session UUID is no longer valid; any subsequent `fetch_rows` for it will return an error.
+
+### `on_refresh(uuid, client, dap_provider)`
+
+Re-evaluates `metadata_expr` for the session using the currently active `sort` and `filter_tree`, updates `session.metadata`, and sends a fresh `{ type:"meta", … }` response. Allows the browser's Refresh button to reflect changes to the DataFrame that occurred while the debugger was paused at a different breakpoint.
+
+All handlers send `{ type:"error", message }` on any failure so the UI can display it.
 
 ---
 

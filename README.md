@@ -36,6 +36,7 @@ Place your cursor on any Pandas DataFrame variable, trigger `:PreviewDataFrame`,
 - **On-demand chunking** — rows are fetched in chunks of 100 as you scroll. The Lua backend streams them over WebSocket.
 - **Async by design** — the local HTTP/WebSocket server runs on `vim.uv` (libuv). Neovim never blocks.
 - **Sort and filter** — multi-column sort and recursive AND/OR filter trees applied server-side via DAP; only matching rows are ever fetched.
+- **Index-aware** — named DataFrame index levels are shown as pinned key columns, visually distinct from data columns.
 - **Extensible** — clean `DapProvider` and `LanguageProvider` interfaces make it straightforward to support additional debuggers and languages beyond the defaults.
 - **Self-contained** — the pre-built frontend bundle is committed to the repo. Users need only Neovim + a DAP adapter. No Node.js required at runtime.
 
@@ -139,17 +140,24 @@ Orchestrator
   ├─ Register session (UUID)
   ├─ Start vim.uv TCP server (lazy, port auto-assigned)
   └─ Open browser: http://127.0.0.1:{PORT}/?session={UUID}
+       (if browser tab already open, broadcasts session_created instead)
 
-Browser tab
+Browser tab — initial connection
   └─ WebSocket ws://127.0.0.1:{PORT}/ws
-       ├─ → { type:"init",             session }
-       ├─ ← { type:"meta",             columns, dtypes, row_count }
-       ├─ → { type:"fetch_rows",       offset:0,   limit:100 }
-       ├─ ← { type:"rows",             data:[[...]] }
-       ├─ → { type:"fetch_rows",       offset:100, limit:100 }  ← scroll trigger
-       ├─ ← { type:"rows",             data:[[...]] }
+       ├─ → { type:"list_sessions" }                              ← on reconnect / page load
+       ├─ ← { type:"sessions_list",   sessions:[{uuid,var_name,...}] }
+       ├─ ← { type:"session_created", uuid, var_name, ... }       ← pushed by Lua on new preview
+       ├─ → { type:"init",            session }                   ← one per tab/session
+       ├─ ← { type:"meta",            columns, dtypes, row_count, index_columns }
+       ├─ → { type:"fetch_rows",      offset:0,   limit:100 }
+       ├─ ← { type:"rows",            offset:0,   data:[[...]] }
+       ├─ → { type:"fetch_rows",      offset:100, limit:100 }     ← scroll trigger
+       ├─ ← { type:"rows",            offset:100, data:[[...]] }
        ├─ → { type:"apply_sort_filter", sort:[…], filter_tree:{…} }  ← user sorts/filters
-       └─ ← { type:"meta",             row_count (filtered) }
+       ├─ ← { type:"meta",            row_count (filtered) }
+       ├─ → { type:"refresh",         session }                   ← refresh button
+       ├─ ← { type:"meta",            row_count, ... }
+       └─ → { type:"close_session",   session }                   ← tab closed
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the full breakdown.
@@ -174,15 +182,17 @@ function MyProvider:metadata_expr(var_name, filter_tree)
   return string.format("my_metadata_fn(%s)", var_name)
 end
 
-function MyProvider:rows_expr(var_name, offset, limit, sort, filter_tree)
+function MyProvider:rows_expr(var_name, offset, limit, sort, filter_tree, index_columns)
   -- sort is a SortEntry[] (or nil); filter_tree is a FilterNode (or nil).
+  -- index_columns is a string[] (or nil); non-empty when the DataFrame has named index levels.
   return string.format("my_rows_fn(%s, %d, %d)", var_name, offset, limit)
 end
 
 function MyProvider:parse_metadata(raw)
   local d = vim.json.decode(raw)
   return { row_count=d.shape[1], col_count=d.shape[2],
-           columns=d.columns, dtypes=d.dtypes }
+           columns=d.columns, dtypes=d.dtypes,
+           index_columns=d.index_columns or {} }
 end
 
 function MyProvider:parse_rows(raw)
@@ -238,7 +248,7 @@ make format          # format Lua with StyLua  (cargo install stylua)
 make format-check    # check formatting without modifying
 make lint            # luacheck              (luarocks install luacheck)
 make test            # run plenary test suite
-make build-ui        # build frontend → ui/dist/index.html  (requires Node.js)
+make build-ui        # build frontend → ui/dist/index.html  (requires bun)
 make ui-dev          # start Vite dev server with hot reload
 make ui-typecheck    # TypeScript type check
 make ci              # format-check + lint + test + ui-typecheck

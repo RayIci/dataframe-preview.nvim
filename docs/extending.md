@@ -24,10 +24,11 @@ The expressions are sent verbatim to the DAP adapter's `evaluate` endpoint. They
 
 ```lua
 ---@class Metadata
----@field row_count integer
----@field col_count integer
----@field columns   string[]
----@field dtypes    string[]
+---@field row_count     integer
+---@field col_count     integer
+---@field columns       string[]
+---@field dtypes        string[]
+---@field index_columns string[]  -- named index level names; empty for default RangeIndex
 ```
 
 ### Skeleton
@@ -46,20 +47,22 @@ function MyProvider:metadata_expr(var_name, filter_tree)
   return "..."
 end
 
-function MyProvider:rows_expr(var_name, offset, limit, sort, filter_tree)
+function MyProvider:rows_expr(var_name, offset, limit, sort, filter_tree, index_columns)
   -- Must produce a JSON array of arrays: [[row0col0, row0col1, ...], ...]
   -- sort is a SortEntry[] (or nil); filter_tree is a FilterNode (or nil).
-  -- Apply them before slicing [offset:offset+limit] for correct paging.
+  -- index_columns is a string[] (or nil); non-empty when the DataFrame has named index levels.
+  -- Apply sort/filter before slicing [offset:offset+limit] for correct paging.
   return "..."
 end
 
 function MyProvider:parse_metadata(raw)
   local d = vim.json.decode(raw)
   return {
-    row_count = d.shape[1],
-    col_count = d.shape[2],
-    columns   = d.columns,
-    dtypes    = d.dtypes,
+    row_count     = d.shape[1],
+    col_count     = d.shape[2],
+    columns       = d.columns,
+    dtypes        = d.dtypes,
+    index_columns = d.index_columns or {},
   }
 end
 
@@ -93,7 +96,8 @@ local classes          = require("dataframe-preview.utils.classes")
 
 local PythonPolars = setmetatable({}, { __index = LanguageProvider })
 
-function PythonPolars:metadata_expr(var_name)
+function PythonPolars:metadata_expr(var_name, filter_tree)
+  -- filter_tree is ignored in this minimal example (no server-side filtering).
   return string.format(
     "__import__('json').dumps({"
       .. "'shape': list(%s.shape),"
@@ -104,10 +108,10 @@ function PythonPolars:metadata_expr(var_name)
   )
 end
 
-function PythonPolars:rows_expr(var_name, offset, limit, sort, filter_tree)
+function PythonPolars:rows_expr(var_name, offset, limit, sort, filter_tree, index_columns)
   -- Polars .to_dicts() returns a list of {col: val} dicts.
   -- We convert to a list of lists to match the shared protocol.
-  -- Sort and filter_tree are not applied in this minimal example.
+  -- Sort, filter_tree, and index_columns are not applied in this minimal example.
   return string.format(
     "__import__('json').dumps("
       .. "[[row[c] for c in %s.columns] "
@@ -120,10 +124,11 @@ end
 function PythonPolars:parse_metadata(raw)
   local d = vim.json.decode(raw)
   return {
-    row_count = d.shape[1],
-    col_count = d.shape[2],
-    columns   = d.columns,
-    dtypes    = d.dtypes,
+    row_count     = d.shape[1],
+    col_count     = d.shape[2],
+    columns       = d.columns,
+    dtypes        = d.dtypes,
+    index_columns = {},  -- Polars has no pandas-style named index
   }
 end
 

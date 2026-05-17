@@ -94,10 +94,11 @@ The resolved provider is stored in the session so that both metadata evaluation 
 --                           'columns': df.columns.tolist(),
 --                           'dtypes': df.dtypes.astype(str).tolist()})
 
-local expr = lang_provider:metadata_expr(var_name)
+-- filter_tree is nil on the initial metadata fetch; it is set after the user applies a filter.
+local expr = lang_provider:metadata_expr(var_name, filter_tree)
 dap_provider:evaluate(expr, frame_id, function(err, result)
   local metadata = lang_provider:parse_metadata(result)
-  -- { row_count=50000, col_count=5, columns=[...], dtypes=[...] }
+  -- { row_count=50000, col_count=5, columns=[...], dtypes=[...], index_columns=[...] }
 end)
 ```
 
@@ -108,9 +109,10 @@ The DAP adapter evaluates this expression in the paused Python process and retur
 ```lua
 local uuid = generate_uuid()
 session_store.create(uuid, {
-  var_name = var_name,
-  frame_id = frame_id,
-  metadata = metadata,
+  var_name      = var_name,
+  frame_id      = frame_id,
+  metadata      = metadata,
+  lang_provider = lang_provider,  -- stored so row fetches reuse the same provider
 })
 ```
 
@@ -150,8 +152,19 @@ SHA1 is computed by `server/sha1.lua` — a pure-Lua, LuaJIT-compatible implemen
 ```
 Browser                          Lua server
   │                                │
+  │  (on connect / reconnect)      │
+  │── { type:"list_sessions" } ──▶│  return all live sessions
+  │◀─ { type:"sessions_list",     │
+  │    sessions:[{uuid,...}] } ─── │
+  │                                │
+  │  (Lua broadcasts on new preview call)
+  │◀─ { type:"session_created",   │
+  │    uuid, var_name, ... } ───── │
+  │                                │
   │── { type:"init", session } ──▶ │  attach ws_client to session
-  │◀─ { type:"meta", ... } ────── │  send metadata from session_store
+  │◀─ { type:"meta",              │  send metadata from session_store
+  │    columns, dtypes, row_count, │
+  │    index_columns } ─────────── │
   │                                │
   │── { type:"fetch_rows",        │
   │    offset:0, limit:100 } ───▶ │  evaluate rows_expr via DAP
@@ -169,6 +182,15 @@ Browser                          Lua server
   │    filter_tree:{…} } ────────▶│  update session; re-eval metadata_expr
   │◀─ { type:"meta",              │  new row_count reflects active filter
   │    row_count (filtered) } ─── │
+  │                                │
+  │  (user clicks Refresh)         │
+  │── { type:"refresh",           │
+  │    session } ────────────────▶│  re-eval metadata preserving sort/filter
+  │◀─ { type:"meta", ... } ────── │
+  │                                │
+  │  (user closes tab)             │
+  └── { type:"close_session",     │
+      session } ──────────────────▶  remove session from store
 ```
 
 Each `fetch_rows` triggers a fresh DAP `evaluate` call. The rows expression:
@@ -252,7 +274,6 @@ init.lua
   │           │     ├── server/http.lua
   │           │     ├── server/ws.lua
   │           │     │     └── server/sha1.lua
-  │           │     │     └── server/http.lua
   │           │     ├── server/handlers.lua
   │           │     │     ├── server/ws.lua
   │           │     │     └── server/session_store.lua
